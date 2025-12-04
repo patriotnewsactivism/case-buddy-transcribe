@@ -82,10 +82,14 @@ const App: React.FC = () => {
 
       setDriveLoadingState("Connecting...");
       try {
-          const files = await openDrivePicker(settings.googleClientId, settings.googleApiKey);
+          const files = await openDrivePicker(
+            settings.googleClientId, 
+            settings.googleApiKey,
+            (progressMsg) => setDriveLoadingState(progressMsg)
+          );
           
           if (files.length > 0) {
-              setDriveLoadingState("Importing...");
+              setDriveLoadingState("Finalizing...");
               handleFilesSelect(files);
           }
       } catch (e: any) {

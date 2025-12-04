@@ -76,13 +76,10 @@ export const initGoogleClient = async (clientId: string, apiKey: string) => {
 /**
  * Downloads a file from Drive and converts it to a standard File object
  */
-const downloadDriveFile = async (fileId: string, fileName: string, mimeType: string): Promise<File> => {
+const downloadDriveFile = async (fileId: string, fileName: string, mimeType: string, accessToken: string): Promise<File> => {
     try {
-        const token = gapi.client.getToken()?.access_token;
-        if (!token) throw new Error("No active Google Access Token");
-
         const fetchRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-            headers: { Authorization: `Bearer ${token}` }
+            headers: { Authorization: `Bearer ${accessToken}` }
         });
         
         if (!fetchRes.ok) throw new Error(`Download failed: ${fetchRes.statusText}`);
@@ -98,33 +95,43 @@ const downloadDriveFile = async (fileId: string, fileName: string, mimeType: str
 /**
  * Recursively lists audio/video files in a folder
  */
-const listFilesRecursive = async (folderId: string): Promise<File[]> => {
+const listFilesRecursive = async (folderId: string, accessToken: string, onProgress?: (msg: string) => void): Promise<File[]> => {
     const filesFound: File[] = [];
     const query = `'${folderId}' in parents and (mimeType contains 'audio/' or mimeType contains 'video/' or mimeType = 'application/vnd.google-apps.folder') and trashed = false`;
     let pageToken = null;
     
     do {
-        if (!gapi.client.drive) await gapi.client.load('drive', 'v3');
-
-        const response = await gapi.client.drive.files.list({
+        // We use fetch directly here to avoid gapi client library quirks with recursion
+        const params = new URLSearchParams({
             q: query,
             fields: 'nextPageToken, files(id, name, mimeType)',
-            pageToken: pageToken
+            key: gapi.client.apiKey // Use loaded API key
         });
+        if (pageToken) params.append('pageToken', pageToken);
+
+        const response = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+
+        if (!response.ok) throw new Error("Failed to list folder contents");
         
-        const files = response.result.files;
+        const result = await response.json();
+        const files = result.files;
+        
         if (!files) break;
 
         for (const file of files) {
             if (file.mimeType === 'application/vnd.google-apps.folder') {
-                const children = await listFilesRecursive(file.id);
+                if (onProgress) onProgress(`Scanning folder: ${file.name}...`);
+                const children = await listFilesRecursive(file.id, accessToken, onProgress);
                 filesFound.push(...children);
             } else {
-                const downloadedFile = await downloadDriveFile(file.id, file.name, file.mimeType);
+                if (onProgress) onProgress(`Downloading: ${file.name}...`);
+                const downloadedFile = await downloadDriveFile(file.id, file.name, file.mimeType, accessToken);
                 filesFound.push(downloadedFile);
             }
         }
-        pageToken = response.result.nextPageToken;
+        pageToken = result.nextPageToken;
     } while (pageToken);
 
     return filesFound;
@@ -133,54 +140,69 @@ const listFilesRecursive = async (folderId: string): Promise<File[]> => {
 /**
  * Opens the Google Drive Picker
  */
-export const openDrivePicker = (clientId: string, apiKey: string): Promise<File[]> => {
+export const openDrivePicker = (
+    clientId: string, 
+    apiKey: string, 
+    onProgress?: (msg: string) => void
+): Promise<File[]> => {
     return new Promise((resolve, reject) => {
         console.log("Loading Google Scripts...");
+        if (onProgress) onProgress("Initializing Google API...");
         
         loadGoogleScripts().then(async () => {
             try {
                 if (!tokenClient) {
-                    console.log("Initializing GAPI...");
                     await initGoogleClient(clientId, apiKey);
                 }
 
-                console.log("Requesting OAuth Token...");
+                if (onProgress) onProgress("Waiting for login...");
+
                 tokenClient.callback = async (resp: any) => {
                     if (resp.error !== undefined) {
                         console.error("OAuth Error:", resp);
                         reject(resp);
                         return;
                     }
+
+                    // CRITICAL FIX: Manually sync the token to gapi client for library calls
+                    if (gapi.client) {
+                        gapi.client.setToken(resp);
+                    }
+                    const accessToken = resp.access_token;
                     
                     try {
-                        console.log("Building Picker...");
-                        // EXTRACT NUMERIC PROJECT ID (Required for setAppId)
-                        // Client ID format: 123456789-abcdefg.apps.googleusercontent.com
+                        if (onProgress) onProgress("Opening Picker...");
+                        
+                        // EXTRACT NUMERIC PROJECT ID
                         const appId = clientId.split('-')[0]; 
                         const origin = window.location.protocol + '//' + window.location.host;
 
                         const pickerBuilder = new google.picker.PickerBuilder()
                             .setDeveloperKey(apiKey)
                             .setAppId(appId)
-                            .setOAuthToken(resp.access_token)
-                            .setOrigin(origin) // Critical for avoiding CORS/Origin blocks
+                            .setOAuthToken(accessToken)
+                            .setOrigin(origin)
                             .addView(new google.picker.DocsView().setIncludeFolders(true).setSelectFolderEnabled(true))
                             .addView(google.picker.ViewId.DOCS_AUDIO)
                             .addView(google.picker.ViewId.DOCS_VIDEO);
 
                         pickerBuilder.setCallback(async (data: any) => {
                             if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
-                                console.log("User picked files/folders. Downloading...");
                                 const docs = data[google.picker.Response.DOCUMENTS];
                                 const results: File[] = [];
                                 
                                 try {
+                                    let count = 0;
                                     for (const doc of docs) {
+                                        count++;
+                                        const progressMsg = `Downloading ${count}/${docs.length}: ${doc.name}`;
+                                        if (onProgress) onProgress(progressMsg);
+
                                         if (doc.mimeType === 'application/vnd.google-apps.folder') {
-                                            const children = await listFilesRecursive(doc.id);
+                                            const children = await listFilesRecursive(doc.id, accessToken, onProgress);
                                             results.push(...children);
                                         } else {
-                                            const file = await downloadDriveFile(doc.id, doc.name, doc.mimeType);
+                                            const file = await downloadDriveFile(doc.id, doc.name, doc.mimeType, accessToken);
                                             results.push(file);
                                         }
                                     }
