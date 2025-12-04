@@ -186,10 +186,17 @@ export const openDrivePicker = (
                     }
 
                     const accessToken = resp.access_token;
-                    
+
+                    // CRITICAL: Validate accessToken before using it
+                    if (!accessToken || typeof accessToken !== 'string') {
+                        console.error("OAuth response missing access_token:", resp);
+                        reject(new Error("OAuth authentication failed: No access token received. Please try again."));
+                        return;
+                    }
+
                     try {
                         if (onProgress) onProgress("Opening Picker...");
-                        
+
                         // Extract App ID safely
                         let appId = '';
                         try {
@@ -197,12 +204,25 @@ export const openDrivePicker = (
                         } catch(e) {
                            console.warn("Could not extract App ID from Client ID. Picker might fail if projects mismatch.");
                         }
-                        
-                        const origin = window.location.protocol + '//' + window.location.host;
+
+                        // Validate origin components
+                        const protocol = window.location.protocol;
+                        const host = window.location.host;
+
+                        if (!protocol || !host) {
+                            throw new Error("Unable to determine application origin. Please reload the page.");
+                        }
+
+                        const origin = protocol + '//' + host;
 
                         // Check Picker Lib
                         if (!window.google || !window.google.picker) {
                             throw new Error("Google Picker library not loaded.");
+                        }
+
+                        // Validate all required values before building picker
+                        if (!apiKey || typeof apiKey !== 'string') {
+                            throw new Error("Invalid API Key. Please check Settings.");
                         }
 
                         // 5. BUILD PICKER
