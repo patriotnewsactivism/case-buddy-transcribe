@@ -215,9 +215,27 @@ export const openDrivePicker = (
 
                         const origin = protocol + '//' + host;
 
-                        // Check Picker Lib
+                        // Check Picker Lib and all required constants
                         if (!window.google || !window.google.picker) {
                             throw new Error("Google Picker library not loaded.");
+                        }
+
+                        // Validate Google Picker API is fully initialized
+                        const picker = window.google.picker;
+                        if (!picker.PickerBuilder) {
+                            throw new Error("Google Picker PickerBuilder not available.");
+                        }
+                        if (!picker.DocsView) {
+                            throw new Error("Google Picker DocsView not available.");
+                        }
+                        if (!picker.ViewId || !picker.ViewId.DOCS_AUDIO || !picker.ViewId.DOCS_VIDEO) {
+                            throw new Error("Google Picker ViewId constants not available.");
+                        }
+                        if (!picker.Response || !picker.Response.ACTION || !picker.Response.DOCUMENTS) {
+                            throw new Error("Google Picker Response constants not available.");
+                        }
+                        if (!picker.Action || !picker.Action.PICKED || !picker.Action.CANCEL) {
+                            throw new Error("Google Picker Action constants not available.");
                         }
 
                         // Validate all required values before building picker
@@ -233,45 +251,85 @@ export const openDrivePicker = (
                             .addView(new google.picker.DocsView().setIncludeFolders(true).setSelectFolderEnabled(true))
                             .addView(google.picker.ViewId.DOCS_AUDIO)
                             .addView(google.picker.ViewId.DOCS_VIDEO);
-                        
+
                         // Only set AppId if we successfully extracted it
-                        if (appId) {
+                        if (appId && typeof appId === 'string' && appId.length > 0) {
                             pickerBuilder.setAppId(appId);
                         }
 
                         pickerBuilder.setCallback(async (data: any) => {
-                            if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
-                                const docs = data[google.picker.Response.DOCUMENTS];
-                                const results: File[] = [];
-                                
-                                try {
-                                    let count = 0;
-                                    for (const doc of docs) {
-                                        count++;
-                                        const progressMsg = `Downloading ${count}/${docs.length}: ${doc.name}`;
-                                        if (onProgress) onProgress(progressMsg);
-
-                                        if (doc.mimeType === 'application/vnd.google-apps.folder') {
-                                            const children = await listFilesRecursive(doc.id, accessToken, apiKey, onProgress);
-                                            results.push(...children);
-                                        } else {
-                                            const file = await downloadDriveFile(doc.id, doc.name, doc.mimeType, accessToken);
-                                            results.push(file);
-                                        }
-                                    }
-                                    resolve(results);
-                                } catch (downloadErr: any) {
-                                    console.error("Download Error", downloadErr);
-                                    reject(new Error("Download failed: " + downloadErr.message));
+                            try {
+                                if (!data) {
+                                    console.error("Picker callback received null/undefined data");
+                                    return;
                                 }
-                                
-                            } else if (data[google.picker.Response.ACTION] === google.picker.Action.CANCEL) {
-                                resolve([]);
+
+                                const action = data[google.picker.Response.ACTION];
+
+                                if (action === google.picker.Action.PICKED) {
+                                    const docs = data[google.picker.Response.DOCUMENTS];
+                                    if (!docs || docs.length === 0) {
+                                        resolve([]);
+                                        return;
+                                    }
+
+                                    const results: File[] = [];
+
+                                    try {
+                                        let count = 0;
+                                        for (const doc of docs) {
+                                            count++;
+                                            const progressMsg = `Downloading ${count}/${docs.length}: ${doc.name}`;
+                                            if (onProgress) onProgress(progressMsg);
+
+                                            if (doc.mimeType === 'application/vnd.google-apps.folder') {
+                                                const children = await listFilesRecursive(doc.id, accessToken, apiKey, onProgress);
+                                                results.push(...children);
+                                            } else {
+                                                const file = await downloadDriveFile(doc.id, doc.name, doc.mimeType, accessToken);
+                                                results.push(file);
+                                            }
+                                        }
+                                        resolve(results);
+                                    } catch (downloadErr: any) {
+                                        console.error("Download Error", downloadErr);
+                                        reject(new Error("Download failed: " + downloadErr.message));
+                                    }
+
+                                } else if (action === google.picker.Action.CANCEL) {
+                                    resolve([]);
+                                }
+                            } catch (callbackErr: any) {
+                                console.error("Picker callback error:", callbackErr);
+                                reject(new Error("Picker callback error: " + callbackErr.message));
                             }
                         });
 
-                        const picker = pickerBuilder.build();
-                        picker.setVisible(true);
+                        // Separate build() call with detailed error handling
+                        let builtPicker;
+                        try {
+                            console.log("Building picker with:", {
+                                hasApiKey: !!apiKey,
+                                hasAccessToken: !!accessToken,
+                                origin: origin,
+                                hasAppId: !!appId
+                            });
+                            builtPicker = pickerBuilder.build();
+                        } catch (buildErr: any) {
+                            console.error("Error during pickerBuilder.build():", buildErr);
+                            throw new Error(`Picker build failed: ${buildErr.message || buildErr.toString()}`);
+                        }
+
+                        if (!builtPicker) {
+                            throw new Error("Picker build returned null/undefined");
+                        }
+
+                        try {
+                            builtPicker.setVisible(true);
+                        } catch (showErr: any) {
+                            console.error("Error showing picker:", showErr);
+                            throw new Error(`Failed to show picker: ${showErr.message || showErr.toString()}`);
+                        }
 
                     } catch (buildError: any) {
                         console.error("Picker Build Error:", buildError);

@@ -94,9 +94,9 @@ const App: React.FC = () => {
           }
       } catch (e: any) {
           console.error("Drive Selection Error", e);
-          
+
           let errorMessage = "Failed to access Google Drive.";
-          
+
           // Try to extract useful Google API error message
           if (e.result && e.result.error && e.result.error.message) {
               errorMessage += `\n\nGoogle Error: ${e.result.error.message}`;
@@ -105,6 +105,12 @@ const App: React.FC = () => {
           } else {
               errorMessage += `\n\nUnknown Error: ${JSON.stringify(e)}`;
           }
+
+          errorMessage += `\n\nTroubleshooting:\n`;
+          errorMessage += `1. Open browser console (F12) and check for detailed error logs\n`;
+          errorMessage += `2. Verify Client ID and API Key in Settings\n`;
+          errorMessage += `3. Ensure you're added as a Test User in OAuth consent screen\n`;
+          errorMessage += `4. Check that both Picker API and Drive API are enabled`;
 
           alert(errorMessage);
       } finally {
