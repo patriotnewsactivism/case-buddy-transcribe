@@ -6,8 +6,8 @@ import TranscriptionResult from './components/TranscriptionResult';
 import SettingsDialog from './components/SettingsDialog';
 import { AppMode, TranscriptionStatus, TranscriptionProvider, TranscriptionSettings } from './types';
 import { transcribeAudio } from './services/transcriptionService';
-import { fileToBase64 } from './utils/audioUtils';
-import { Loader2, ArrowRight, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { fileToBase64, processMediaFile } from './utils/audioUtils';
+import { Loader2, ArrowRight, ShieldCheck, AlertTriangle, FileAudio } from 'lucide-react';
 
 const DEFAULT_SETTINGS: TranscriptionSettings = {
   provider: TranscriptionProvider.GEMINI,
@@ -22,6 +22,7 @@ const App: React.FC = () => {
   const [status, setStatus] = useState<TranscriptionStatus>(TranscriptionStatus.IDLE);
   const [transcription, setTranscription] = useState<string>('');
   const [activeFile, setActiveFile] = useState<File | Blob | null>(null);
+  const [processingStatus, setProcessingStatus] = useState<string>('');
   
   // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -48,8 +49,6 @@ const App: React.FC = () => {
         if (data.text && data.text.length > 0) {
           setTranscription(data.text);
           setStatus(TranscriptionStatus.COMPLETED);
-          // Note: We cannot restore the 'activeFile' Blob from localstorage due to security/size.
-          // The UI handles this by showing the result without the file action button.
         }
       } catch (e) {
         console.error("Failed to restore session", e);
@@ -91,10 +90,27 @@ const App: React.FC = () => {
 
     setStatus(TranscriptionStatus.PROCESSING);
     setErrorMsg('');
+    setProcessingStatus('Initializing...');
 
     try {
-      const base64 = await fileToBase64(activeFile);
-      const text = await transcribeAudio(activeFile, base64, settings);
+      // 1. Pre-process media (Extract audio from video, downsample)
+      setProcessingStatus('Optimizing Media (Extracting Audio)...');
+      
+      let fileToUpload: File | Blob = activeFile;
+      if (activeFile instanceof File) {
+         fileToUpload = await processMediaFile(activeFile);
+      }
+      
+      setProcessingStatus('Uploading & Transcribing...');
+      
+      // 2. Transcribe
+      // We pass null for base64 as the service now handles file processing internally for large files
+      // but we still pass it for small files logic inside service if needed, or we refactor service to ignore it.
+      // To be safe, we generate base64 only if needed inside service, but here we pass empty string as service handles it now
+      // or we can generate it here if strictly needed. 
+      // Current service uses file object for logic, so we pass empty string for base64 arg.
+      
+      const text = await transcribeAudio(fileToUpload, '', settings);
       
       setTranscription(text);
       setStatus(TranscriptionStatus.COMPLETED);
@@ -113,9 +129,6 @@ const App: React.FC = () => {
       localStorage.removeItem('whisper_current_session');
   }
 
-  // If mode changes, reset state but keep session if completed? 
-  // Standard behavior: Changing mode resets input, but if we have a result, we might want to keep it.
-  // For simplicity, we reset to clear the workspace.
   useEffect(() => {
     if (status !== TranscriptionStatus.COMPLETED) {
         reset();
@@ -142,15 +155,17 @@ const App: React.FC = () => {
 
       <main className="max-w-5xl mx-auto px-4 py-12 flex flex-col items-center">
         
-        {/* Intro Text (Only when Idle and no File) */}
+        {/* Intro Text */}
         {!activeFile && status === TranscriptionStatus.IDLE && (
             <div className="text-center mb-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
                 <h2 className="text-4xl md:text-5xl font-bold tracking-tight text-white mb-4">
                     Turn voice into evidence.
                 </h2>
                 <p className="text-lg text-zinc-400 max-w-2xl mx-auto">
-                    Record proceedings, depositions, or notes. 
-                    Switch between <span className="text-indigo-400 font-medium">Gemini</span>, <span className="text-indigo-400 font-medium">Whisper</span>, and <span className="text-indigo-400 font-medium">AssemblyAI</span> for maximum accuracy.
+                    Record proceedings or upload large video/audio files. 
+                    <span className="block mt-2 text-sm text-zinc-500">
+                        Smart Engine automatically extracts audio from video for faster processing.
+                    </span>
                 </p>
             </div>
         )}
@@ -168,11 +183,9 @@ const App: React.FC = () => {
             )}
         </div>
 
-        {/* Action Button & Settings Preview */}
+        {/* Action Button */}
         {activeFile && status === TranscriptionStatus.IDLE && (
             <div className="mt-8 flex flex-col items-center gap-4 animate-in zoom-in fade-in duration-300">
-                
-                {/* Mode Indicator */}
                 <div className="flex items-center gap-2 px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full text-xs text-zinc-400">
                     <div className={`w-2 h-2 rounded-full ${settings.provider === TranscriptionProvider.GEMINI ? 'bg-blue-500' : settings.provider === TranscriptionProvider.OPENAI ? 'bg-green-500' : 'bg-purple-500'}`}></div>
                     Using: <span className="font-medium text-zinc-200">{settings.provider}</span>
@@ -189,7 +202,7 @@ const App: React.FC = () => {
                     onClick={handleStartTranscription}
                     className="group flex items-center gap-3 px-8 py-4 bg-white text-black rounded-full text-lg font-semibold hover:bg-zinc-200 transition-all shadow-[0_0_40px_-10px_rgba(255,255,255,0.3)] hover:shadow-[0_0_60px_-15px_rgba(255,255,255,0.4)]"
                 >
-                    Transcribe Audio
+                    Start Processing
                     <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
                 </button>
             </div>
@@ -202,14 +215,12 @@ const App: React.FC = () => {
                     <div className="absolute inset-0 bg-indigo-500 blur-xl opacity-20 animate-pulse rounded-full"></div>
                     <Loader2 size={48} className="text-indigo-500 animate-spin relative z-10" />
                 </div>
-                <h3 className="mt-6 text-xl font-medium text-white">Transcribing...</h3>
-                <p className="text-zinc-500 mt-2">
-                  Engine: <span className="text-zinc-300 font-medium">{settings.provider}</span> 
-                  {settings.legalMode ? ' (Legal Mode Active)' : ''}
+                <h3 className="mt-6 text-xl font-medium text-white">
+                    {processingStatus || 'Processing...'}
+                </h3>
+                <p className="text-zinc-500 mt-2 text-sm max-w-md text-center">
+                  Depending on file size, we may be extracting audio tracks or uploading to secure storage. Please do not close the tab.
                 </p>
-                {settings.provider === TranscriptionProvider.ASSEMBLYAI && (
-                    <p className="text-xs text-zinc-600 mt-2">Uploading & Polling (this may take a moment)</p>
-                )}
             </div>
         )}
 

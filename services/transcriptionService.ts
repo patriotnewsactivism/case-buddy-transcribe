@@ -1,19 +1,17 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { TranscriptionProvider, TranscriptionSettings } from "../types";
+import { fileToBase64 } from "../utils/audioUtils";
 
 // --- GEMINI IMPLEMENTATION ---
 const transcribeWithGemini = async (
-  base64Audio: string,
-  mimeType: string,
+  file: Blob | File,
   settings: TranscriptionSettings
 ): Promise<string> => {
   const API_KEY = process.env.API_KEY || '';
   if (!API_KEY) throw new Error("Missing Gemini API Key in environment.");
 
   const ai = new GoogleGenAI({ apiKey: API_KEY });
-  
-  // Use Gemini 3 Pro for Legal Mode (Higher reasoning/accuracy), Flash for speed/standard
-  const model = settings.legalMode ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
+  const modelName = settings.legalMode ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
 
   let prompt = "Please transcribe the following audio file accurately. Format with clear paragraph breaks.";
   
@@ -32,17 +30,74 @@ const transcribeWithGemini = async (
     `;
   }
 
-  const response: GenerateContentResponse = await ai.models.generateContent({
-    model: model,
-    contents: {
-      parts: [
-        { inlineData: { mimeType: mimeType, data: base64Audio } },
-        { text: prompt }
-      ]
-    }
-  });
+  // --- LARGE FILE HANDLING ---
+  // If file is > 18MB (safe margin below 20MB limit), we MUST use the File API.
+  if (file.size > 18 * 1024 * 1024) {
+    try {
+        // 1. Upload the file to Google's temporary GenAI storage
+        const uploadResponse = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
+            method: 'POST',
+            headers: {
+                'X-Goog-Upload-Protocol': 'resumable',
+                'X-Goog-Upload-Command': 'start',
+                'X-Goog-Upload-Header-Content-Length': file.size.toString(),
+                'X-Goog-Upload-Header-Content-Type': file.type || 'audio/wav',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ file: { display_name: 'Audio_Evidence' } })
+        });
 
-  return response.text || "No text returned from Gemini.";
+        const uploadUrl = uploadResponse.headers.get('X-Goog-Upload-URL');
+        if (!uploadUrl) throw new Error("Failed to initiate large file upload.");
+
+        // 2. Perform the actual bytes transfer
+        const bytesResponse = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Length': file.size.toString(),
+                'X-Goog-Upload-Offset': '0',
+                'X-Goog-Upload-Command': 'upload, finalize'
+            },
+            body: file
+        });
+        
+        const fileData = await bytesResponse.json();
+        const fileUri = fileData.file.uri;
+
+        // 3. Generate Content using the File URI
+        const response: GenerateContentResponse = await ai.models.generateContent({
+            model: modelName,
+            contents: {
+                parts: [
+                    { fileData: { fileUri: fileUri, mimeType: file.type || 'audio/wav' } },
+                    { text: prompt }
+                ]
+            }
+        });
+        return response.text || "No text returned.";
+
+    } catch (e) {
+        console.error("Large file upload failed:", e);
+        throw new Error("File too large for standard upload and File API failed. Please try a shorter clip.");
+    }
+  } 
+  
+  // --- STANDARD SMALL FILE HANDLING ---
+  else {
+      const base64Audio = await fileToBase64(file);
+      const mimeType = file.type || 'audio/webm';
+      
+      const response: GenerateContentResponse = await ai.models.generateContent({
+        model: modelName,
+        contents: {
+          parts: [
+            { inlineData: { mimeType: mimeType, data: base64Audio } },
+            { text: prompt }
+          ]
+        }
+      });
+      return response.text || "No text returned from Gemini.";
+  }
 };
 
 // --- OPENAI WHISPER IMPLEMENTATION ---
@@ -57,16 +112,13 @@ const transcribeWithOpenAI = async (
   formData.append("file", audioFile);
   formData.append("model", "whisper-1");
   
-  // prompt parameter in Whisper is for context/style
   if (settings.legalMode) {
     formData.append("prompt", "Transcribe verbatim with Speaker labels (Speaker 1, Speaker 2). Correct obvious phonetic errors.");
   }
 
   const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-    },
+    headers: { "Authorization": `Bearer ${apiKey}` },
     body: formData,
   });
 
@@ -87,7 +139,6 @@ const transcribeWithAssemblyAI = async (
 ): Promise<string> => {
   if (!apiKey) throw new Error("AssemblyAI API Key is missing. Please add it in Settings.");
 
-  // 1. Upload
   const uploadResponse = await fetch("https://api.assemblyai.com/v2/upload", {
     method: "POST",
     headers: { "Authorization": apiKey },
@@ -98,7 +149,6 @@ const transcribeWithAssemblyAI = async (
   const uploadData = await uploadResponse.json();
   const uploadUrl = uploadData.upload_url;
 
-  // 2. Start Transcription
   const transcriptResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
     method: "POST",
     headers: {
@@ -110,7 +160,6 @@ const transcribeWithAssemblyAI = async (
       speaker_labels: settings.legalMode, 
       punctuate: true,
       format_text: true,
-      // AssemblyAI specific setting to help with accuracy
       speech_model: settings.legalMode ? 'best' : 'nano', 
     }),
   });
@@ -119,24 +168,19 @@ const transcribeWithAssemblyAI = async (
   const transcriptData = await transcriptResponse.json();
   const transcriptId = transcriptData.id;
 
-  // 3. Poll for completion
   let status = "queued";
   let text = "";
   
   while (status !== "completed" && status !== "error") {
-    await new Promise((r) => setTimeout(r, 2000)); // Poll every 2s
-    
+    await new Promise((r) => setTimeout(r, 2000));
     const pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
       headers: { "Authorization": apiKey },
     });
-    
     const pollData = await pollResponse.json();
     status = pollData.status;
 
     if (status === "error") throw new Error(`AssemblyAI processing error: ${pollData.error}`);
-    
     if (status === "completed") {
-      // If legal mode (speaker labels), we format it to match our generic format for parsing
       if (settings.legalMode && pollData.utterances) {
         text = pollData.utterances
           .map((u: any) => `[${new Date(u.start).toISOString().substr(14, 5)}] [Speaker ${u.speaker}] ${u.text}`)
@@ -146,7 +190,6 @@ const transcribeWithAssemblyAI = async (
       }
     }
   }
-
   return text;
 };
 
@@ -156,9 +199,6 @@ export const transcribeAudio = async (
   base64: string,
   settings: TranscriptionSettings
 ): Promise<string> => {
-  // Determine mime type for Gemini
-  const mimeType = file.type || 'audio/webm';
-
   switch (settings.provider) {
     case TranscriptionProvider.OPENAI:
       return await transcribeWithOpenAI(file, settings.openaiKey, settings);
@@ -166,6 +206,6 @@ export const transcribeAudio = async (
       return await transcribeWithAssemblyAI(file, settings.assemblyAiKey, settings);
     case TranscriptionProvider.GEMINI:
     default:
-      return await transcribeWithGemini(base64, mimeType, settings);
+      return await transcribeWithGemini(file, settings);
   }
 };
