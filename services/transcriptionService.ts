@@ -11,16 +11,25 @@ const transcribeWithGemini = async (
   if (!API_KEY) throw new Error("Missing Gemini API Key in environment.");
 
   const ai = new GoogleGenAI({ apiKey: API_KEY });
-  const model = 'gemini-2.5-flash';
+  
+  // Use Gemini 3 Pro for Legal Mode (Higher reasoning/accuracy), Flash for speed/standard
+  const model = settings.legalMode ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
 
   let prompt = "Please transcribe the following audio file accurately. Format with clear paragraph breaks.";
   
   if (settings.legalMode) {
-    prompt = `You are an expert Court Reporter. Transcribe the attached audio file VERBATIM for a legal case. 
-    1. Identify different speakers (Speaker 1, Speaker 2, etc.).
+    prompt = `You are an expert Court Reporter. Transcribe the attached audio file for a legal case.
+    
+    STRICT FORMATTING RULES:
+    1. Identify different speakers using the format: [Speaker 1], [Speaker 2], etc.
     2. Insert timestamps [MM:SS] at the start of every speaker change.
-    3. Do not correct grammar or remove stuttering; accuracy to the recording is paramount for evidence.
-    4. Return ONLY the transcript.`;
+    3. Return ONLY the transcript text. No intro/outro.
+
+    ACCURACY & EDITING RULES:
+    1. VERBATIM: Keep the sentence structure, slang, and grammar exactly as spoken.
+    2. OBVIOUS ERRORS: If a word is clearly a phonetic error (e.g., "reel a state" instead of "real estate"), CORRECT IT based on context.
+    3. HESITATIONS: Keep 'um' and 'ah' only if they indicate significant hesitation or are relevant to the witness's credibility. Otherwise, remove minor stutters for readability.
+    `;
   }
 
   const response: GenerateContentResponse = await ai.models.generateContent({
@@ -48,9 +57,9 @@ const transcribeWithOpenAI = async (
   formData.append("file", audioFile);
   formData.append("model", "whisper-1");
   
-  // prompt parameter in Whisper is for context/style, not instruction, but helps guide style
+  // prompt parameter in Whisper is for context/style
   if (settings.legalMode) {
-    formData.append("prompt", "Verbatim transcription with timestamps.");
+    formData.append("prompt", "Transcribe verbatim with Speaker labels (Speaker 1, Speaker 2). Correct obvious phonetic errors.");
   }
 
   const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
@@ -98,9 +107,11 @@ const transcribeWithAssemblyAI = async (
     },
     body: JSON.stringify({
       audio_url: uploadUrl,
-      speaker_labels: settings.legalMode, // Great for legal cases
+      speaker_labels: settings.legalMode, 
       punctuate: true,
       format_text: true,
+      // AssemblyAI specific setting to help with accuracy
+      speech_model: settings.legalMode ? 'best' : 'nano', 
     }),
   });
 
@@ -125,10 +136,10 @@ const transcribeWithAssemblyAI = async (
     if (status === "error") throw new Error(`AssemblyAI processing error: ${pollData.error}`);
     
     if (status === "completed") {
-      // If legal mode (speaker labels), we format it nicely
+      // If legal mode (speaker labels), we format it to match our generic format for parsing
       if (settings.legalMode && pollData.utterances) {
         text = pollData.utterances
-          .map((u: any) => `[${new Date(u.start).toISOString().substr(14, 5)}] Speaker ${u.speaker}: ${u.text}`)
+          .map((u: any) => `[${new Date(u.start).toISOString().substr(14, 5)}] [Speaker ${u.speaker}] ${u.text}`)
           .join("\n\n");
       } else {
         text = pollData.text;

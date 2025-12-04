@@ -1,14 +1,16 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Mic, Square, Play, RotateCcw, AlertCircle } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Mic, Square, RotateCcw, AlertCircle, Download, Save } from 'lucide-react';
 import { TranscriptionStatus } from '../types';
 import { formatTime } from '../utils/audioUtils';
+import { downloadFile, generateFilename } from '../utils/fileUtils';
 
 interface AudioRecorderProps {
   onRecordingComplete: (blob: Blob) => void;
   status: TranscriptionStatus;
+  autoDownload: boolean; // New prop
 }
 
-const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplete, status }) => {
+const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplete, status, autoDownload }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
@@ -42,6 +44,12 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplete, stat
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         setAudioBlob(blob);
         onRecordingComplete(blob);
+        
+        // Auto-Download Logic
+        if (autoDownload) {
+          downloadFile(blob, generateFilename('Evidence_Audio', 'webm'), 'audio/webm');
+        }
+
         stopVisualizer();
       };
 
@@ -79,6 +87,12 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplete, stat
     setAudioBlob(null);
     setRecordingTime(0);
     setError(null);
+  };
+
+  const handleManualDownload = () => {
+    if (audioBlob) {
+      downloadFile(audioBlob, generateFilename('Evidence_Audio', 'webm'), 'audio/webm');
+    }
   };
 
   // Visualizer Logic
@@ -212,16 +226,26 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplete, stat
             >
               <RotateCcw size={20} />
             </button>
-            <div className="flex flex-col items-center">
-                <div className="text-sm text-indigo-400 mb-2 font-medium">Ready to Transcribe</div>
-                 {/* The parent component handles the "Transcribe" button via the blob passed in onRecordingComplete */}
-            </div>
+            
+            <button
+              onClick={handleManualDownload}
+              className="flex items-center justify-center w-14 h-14 rounded-full bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 hover:text-white transition-all border border-emerald-600/30"
+              title="Save Audio to Disk"
+            >
+              <Save size={20} />
+            </button>
           </>
         )}
       </div>
       
       {audioBlob && (
         <audio controls src={URL.createObjectURL(audioBlob)} className="mt-8 w-full max-w-md h-10 opacity-70" />
+      )}
+      
+      {autoDownload && isRecording && (
+        <div className="mt-4 text-xs text-emerald-500 flex items-center gap-1 animate-pulse">
+            <Download size={12} /> Auto-save enabled
+        </div>
       )}
     </div>
   );

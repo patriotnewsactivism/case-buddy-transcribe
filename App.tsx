@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS: TranscriptionSettings = {
   openaiKey: '',
   assemblyAiKey: '',
   legalMode: false,
+  autoDownloadAudio: false,
 };
 
 const App: React.FC = () => {
@@ -32,7 +33,7 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('whisper_settings');
     if (saved) {
       try {
-        setSettings(JSON.parse(saved));
+        setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(saved) });
       } catch (e) {
         console.error("Failed to parse settings", e);
       }
@@ -122,7 +123,11 @@ const App: React.FC = () => {
         {/* Input Section */}
         <div className={`w-full transition-all duration-500 ${status === TranscriptionStatus.COMPLETED ? 'hidden' : 'block'}`}>
             {mode === AppMode.RECORD ? (
-              <AudioRecorder onRecordingComplete={handleRecordingComplete} status={status} />
+              <AudioRecorder 
+                onRecordingComplete={handleRecordingComplete} 
+                status={status} 
+                autoDownload={settings.autoDownloadAudio}
+              />
             ) : (
               <FileUploader onFileSelect={handleFileSelect} />
             )}

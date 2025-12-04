@@ -21,6 +21,7 @@ export interface TranscriptionSettings {
   openaiKey: string;
   assemblyAiKey: string;
   legalMode: boolean; // Enables verbatim, timestamps, and speaker ID
+  autoDownloadAudio: boolean; // New: Auto-save audio on stop
 }
 
 export interface TranscriptionResult {
