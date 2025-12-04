@@ -167,6 +167,11 @@ const transcribeWithOpenAI = async (
 ): Promise<string> => {
   if (!apiKey) throw new Error("OpenAI API Key is missing. Please add it in Settings.");
 
+  // Guardrail for OpenAI's 25MB limit
+  if (audioFile.size > 25 * 1024 * 1024) {
+      throw new Error(`This file is ${Math.round(audioFile.size / 1024 / 1024)}MB. OpenAI Whisper has a strict 25MB limit. Please use AssemblyAI or Gemini for this file.`);
+  }
+
   const formData = new FormData();
   formData.append("file", audioFile);
   formData.append("model", "whisper-1");
@@ -194,20 +199,46 @@ const transcribeWithOpenAI = async (
 const transcribeWithAssemblyAI = async (
   audioFile: Blob | File,
   apiKey: string,
-  settings: TranscriptionSettings
+  settings: TranscriptionSettings,
+  onProgress?: (percent: number) => void
 ): Promise<string> => {
   if (!apiKey) throw new Error("AssemblyAI API Key is missing. Please add it in Settings.");
 
-  const uploadResponse = await fetch("https://api.assemblyai.com/v2/upload", {
-    method: "POST",
-    headers: { "Authorization": apiKey },
-    body: audioFile,
+  // 1. Upload Audio with XHR for Progress Tracking
+  if (onProgress) onProgress(1);
+  
+  const uploadUrl = await new Promise<string>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', "https://api.assemblyai.com/v2/upload");
+      xhr.setRequestHeader("Authorization", apiKey);
+
+      xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && onProgress) {
+              const percent = Math.round((e.loaded / e.total) * 100);
+              onProgress(percent);
+          }
+      };
+
+      xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                  const data = JSON.parse(xhr.responseText);
+                  resolve(data.upload_url);
+              } catch (err) {
+                  reject(new Error("Failed to parse AssemblyAI upload response"));
+              }
+          } else {
+              reject(new Error(`AssemblyAI Upload failed: ${xhr.statusText}`));
+          }
+      };
+
+      xhr.onerror = () => reject(new Error("Network Error during AssemblyAI upload"));
+      xhr.send(audioFile);
   });
 
-  if (!uploadResponse.ok) throw new Error("Failed to upload audio to AssemblyAI");
-  const uploadData = await uploadResponse.json();
-  const uploadUrl = uploadData.upload_url;
+  if (onProgress) onProgress(100);
 
+  // 2. Start Transcription
   const transcriptResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
     method: "POST",
     headers: {
@@ -227,6 +258,7 @@ const transcribeWithAssemblyAI = async (
   const transcriptData = await transcriptResponse.json();
   const transcriptId = transcriptData.id;
 
+  // 3. Poll for Results
   let status = "queued";
   let text = "";
   
@@ -263,7 +295,7 @@ export const transcribeAudio = async (
     case TranscriptionProvider.OPENAI:
       return await transcribeWithOpenAI(file, settings.openaiKey, settings);
     case TranscriptionProvider.ASSEMBLYAI:
-      return await transcribeWithAssemblyAI(file, settings.assemblyAiKey, settings);
+      return await transcribeWithAssemblyAI(file, settings.assemblyAiKey, settings, onProgress);
     case TranscriptionProvider.GEMINI:
     default:
       return await transcribeWithGemini(file, settings, onProgress);
