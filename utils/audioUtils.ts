@@ -85,11 +85,20 @@ export const encodeWAV = (samples: Float32Array, sampleRate: number = 16000) => 
  * 3. Returns a compact WAV Blob.
  */
 export const processMediaFile = async (file: File): Promise<Blob> => {
-    // If it's a small audio file (under 10MB), just use it directly to save time.
+    // 1. FAST PATH: Small audio files (< 10MB)
     if (file.type.startsWith('audio/') && file.size < 10 * 1024 * 1024) {
         return file;
     }
 
+    // 2. SAFETY PATH: Huge files (> 300MB)
+    // Decoding >300MB into memory can crash the browser tab (OOM).
+    // In this case, we skip client-side conversion and upload the original file directly to Gemini.
+    if (file.size > 300 * 1024 * 1024) {
+        console.warn("File too large for client-side processing, skipping conversion.");
+        return file;
+    }
+
+    // 3. CONVERSION PATH: Standard large files (10MB - 300MB)
     try {
         const arrayBuffer = await file.arrayBuffer();
         const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();

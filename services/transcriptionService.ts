@@ -2,6 +2,36 @@ import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { TranscriptionProvider, TranscriptionSettings } from "../types";
 import { fileToBase64 } from "../utils/audioUtils";
 
+/**
+ * Polls the Gemini File API until the uploaded file is in the 'ACTIVE' state.
+ */
+const waitForFileActive = async (fileUri: string, apiKey: string): Promise<void> => {
+    const fileId = fileUri.split('/').pop();
+    if (!fileId) return;
+
+    const maxAttempts = 60; // Wait up to 2 minutes (2s * 60)
+    let attempt = 0;
+
+    while (attempt < maxAttempts) {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/files/${fileId}?key=${apiKey}`);
+        if (!response.ok) throw new Error("Failed to check file status");
+        
+        const data = await response.json();
+        
+        if (data.state === 'ACTIVE') {
+            return;
+        } else if (data.state === 'FAILED') {
+            throw new Error("File processing failed on Google servers.");
+        }
+
+        // Wait 2 seconds before next poll
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        attempt++;
+    }
+    
+    throw new Error("File processing timed out.");
+};
+
 // --- GEMINI IMPLEMENTATION ---
 const transcribeWithGemini = async (
   file: Blob | File,
@@ -64,7 +94,10 @@ const transcribeWithGemini = async (
         const fileData = await bytesResponse.json();
         const fileUri = fileData.file.uri;
 
-        // 3. Generate Content using the File URI
+        // 3. Wait for file to be active (Critical for large video files)
+        await waitForFileActive(fileUri, API_KEY);
+
+        // 4. Generate Content using the File URI
         const response: GenerateContentResponse = await ai.models.generateContent({
             model: modelName,
             contents: {
@@ -78,7 +111,7 @@ const transcribeWithGemini = async (
 
     } catch (e) {
         console.error("Large file upload failed:", e);
-        throw new Error("File too large for standard upload and File API failed. Please try a shorter clip.");
+        throw new Error("File processing failed. Please try a shorter clip or check your connection.");
     }
   } 
   
