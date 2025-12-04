@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Save, Shield, Key, Cpu, Eye, EyeOff, Download, Cloud } from 'lucide-react';
+import { X, Save, Shield, Key, Cpu, Eye, EyeOff, Download, Cloud, HardDrive } from 'lucide-react';
 import { TranscriptionProvider, TranscriptionSettings } from '../types';
 
 interface SettingsDialogProps {
@@ -13,6 +13,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
   const [localSettings, setLocalSettings] = React.useState<TranscriptionSettings>(settings);
   const [showOpenAIKey, setShowOpenAIKey] = useState(false);
   const [showAssemblyKey, setShowAssemblyKey] = useState(false);
+  const [showGoogleClientId, setShowGoogleClientId] = useState(false);
 
   // Sync when opening
   React.useEffect(() => {
@@ -122,8 +123,34 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
           </div>
 
           {/* API Keys */}
-          {localSettings.provider !== TranscriptionProvider.GEMINI && (
-             <div className="space-y-4 pt-2 border-t border-zinc-800">
+          <div className="space-y-4 pt-2 border-t border-zinc-800">
+             
+             {/* Google Drive Client ID */}
+             <div className="space-y-2 animate-in slide-in-from-top-2">
+                <label className="text-xs font-medium text-zinc-400 flex items-center gap-1">
+                  <HardDrive size={12} /> Google Drive Client ID
+                </label>
+                <div className="relative">
+                  <input
+                    type={showGoogleClientId ? "text" : "password"}
+                    placeholder="Enter OAuth Client ID"
+                    value={localSettings.googleClientId || ''}
+                    onChange={(e) => setLocalSettings({ ...localSettings, googleClientId: e.target.value })}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 pr-10"
+                  />
+                  <button 
+                    onClick={() => setShowGoogleClientId(!showGoogleClientId)}
+                    className="absolute right-3 top-2.5 text-zinc-500 hover:text-zinc-300"
+                    tabIndex={-1}
+                  >
+                      {showGoogleClientId ? <EyeOff size={14}/> : <Eye size={14}/>}
+                  </button>
+                </div>
+                <p className="text-[10px] text-zinc-500">Required for importing folders from Google Drive.</p>
+              </div>
+
+            {localSettings.provider !== TranscriptionProvider.GEMINI && (
+                <>
                 {localSettings.provider === TranscriptionProvider.OPENAI && (
                   <div className="space-y-2 animate-in slide-in-from-top-2">
                     <label className="text-xs font-medium text-zinc-400 flex items-center gap-1">
@@ -173,8 +200,9 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
                     <p className="text-[10px] text-zinc-500">Key is stored in your browser's local storage.</p>
                   </div>
                 )}
-             </div>
-          )}
+                </>
+             )}
+          </div>
 
         </div>
 

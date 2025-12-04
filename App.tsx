@@ -1,58 +1,47 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Header from './components/Header';
 import AudioRecorder from './components/AudioRecorder';
 import FileUploader from './components/FileUploader';
 import TranscriptionResult from './components/TranscriptionResult';
+import BatchQueue from './components/BatchQueue';
 import SettingsDialog from './components/SettingsDialog';
-import { AppMode, TranscriptionStatus, TranscriptionProvider, TranscriptionSettings } from './types';
+import { AppMode, TranscriptionStatus, TranscriptionProvider, TranscriptionSettings, BatchItem } from './types';
 import { transcribeAudio } from './services/transcriptionService';
-import { fileToBase64, processMediaFile } from './utils/audioUtils';
-import { Loader2, ArrowRight, ShieldCheck, AlertTriangle, FileAudio } from 'lucide-react';
+import { processMediaFile } from './utils/audioUtils';
+import { downloadFile, generateFilename } from './utils/fileUtils';
+import { openDrivePicker } from './services/driveService';
+import { ArrowLeft, Plus } from 'lucide-react';
 
 const DEFAULT_SETTINGS: TranscriptionSettings = {
   provider: TranscriptionProvider.GEMINI,
   openaiKey: '',
   assemblyAiKey: '',
+  googleClientId: '',
   legalMode: false,
   autoDownloadAudio: false,
 };
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.RECORD);
-  const [status, setStatus] = useState<TranscriptionStatus>(TranscriptionStatus.IDLE);
-  const [transcription, setTranscription] = useState<string>('');
-  const [activeFile, setActiveFile] = useState<File | Blob | null>(null);
-  const [processingStatus, setProcessingStatus] = useState<string>('');
-  const [uploadProgress, setUploadProgress] = useState<number>(0);
-  
-  // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<TranscriptionSettings>(DEFAULT_SETTINGS);
-  const [errorMsg, setErrorMsg] = useState<string>('');
+  
+  // Batch State
+  const [queue, setQueue] = useState<BatchItem[]>([]);
+  const [viewingItemId, setViewingItemId] = useState<string | null>(null);
+  const isProcessingRef = useRef(false);
 
-  // Load settings and Restore Session on mount
+  // Drive State
+  const [isDriveLoading, setIsDriveLoading] = useState(false);
+
+  // Load settings
   useEffect(() => {
-    // 1. Settings
     const savedSettings = localStorage.getItem('whisper_settings');
     if (savedSettings) {
       try {
         setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) });
       } catch (e) {
         console.error("Failed to parse settings", e);
-      }
-    }
-
-    // 2. Session Recovery
-    const savedSession = localStorage.getItem('whisper_current_session');
-    if (savedSession) {
-      try {
-        const data = JSON.parse(savedSession);
-        if (data.text && data.text.length > 0) {
-          setTranscription(data.text);
-          setStatus(TranscriptionStatus.COMPLETED);
-        }
-      } catch (e) {
-        console.error("Failed to restore session", e);
       }
     }
   }, []);
@@ -62,97 +51,139 @@ const App: React.FC = () => {
     localStorage.setItem('whisper_settings', JSON.stringify(newSettings));
   };
 
-  // Persist Session when it changes
-  useEffect(() => {
-    if (status === TranscriptionStatus.COMPLETED && transcription) {
-      localStorage.setItem('whisper_current_session', JSON.stringify({
-        text: transcription,
-        date: new Date().toISOString()
-      }));
-    }
-  }, [status, transcription]);
+  // --- QUEUE MANAGEMENT ---
 
-  const handleFileSelect = (file: File) => {
-    setActiveFile(file);
-    setStatus(TranscriptionStatus.IDLE);
-    setTranscription('');
-    setErrorMsg('');
-    setUploadProgress(0);
+  const handleFilesSelect = (files: File[]) => {
+    const newItems: BatchItem[] = files.map(file => ({
+      id: Math.random().toString(36).substring(7),
+      file,
+      status: 'QUEUED',
+      stage: 'Pending',
+      progress: 0
+    }));
+
+    setQueue(prev => [...prev, ...newItems]);
+    setMode(AppMode.UPLOAD); // Ensure we are in upload mode view
   };
 
   const handleRecordingComplete = (blob: Blob) => {
-    setActiveFile(blob);
-    setStatus(TranscriptionStatus.IDLE);
-    setTranscription('');
-    setErrorMsg('');
-    setUploadProgress(0);
+    // Treat recording as a single file batch
+    const file = new File([blob], `Recording_${new Date().toLocaleTimeString()}.webm`, { type: 'audio/webm' });
+    handleFilesSelect([file]);
   };
 
-  const handleStartTranscription = async () => {
-    if (!activeFile) return;
+  const handleDriveSelect = async () => {
+      if (!settings.googleClientId) {
+          alert("Please configure your Google Client ID in settings to use Drive Integration.");
+          setIsSettingsOpen(true);
+          return;
+      }
 
-    setStatus(TranscriptionStatus.PROCESSING);
-    setErrorMsg('');
-    setProcessingStatus('Initializing...');
-    setUploadProgress(0);
+      setIsDriveLoading(true);
+      try {
+          const files = await openDrivePicker(settings.googleClientId, process.env.API_KEY || '');
+          if (files.length > 0) {
+              handleFilesSelect(files);
+          }
+      } catch (e) {
+          console.error("Drive Selection Error", e);
+          alert("Failed to access Google Drive. Please check your Client ID and network connection.");
+      } finally {
+          setIsDriveLoading(false);
+      }
+  };
+
+  const updateItem = (id: string, updates: Partial<BatchItem>) => {
+    setQueue(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
+  };
+
+  // --- BATCH PROCESSOR LOOP ---
+  
+  const processQueue = async () => {
+    if (isProcessingRef.current) return;
+
+    // Find next queued item
+    const nextItem = queue.find(i => i.status === 'QUEUED');
+    if (!nextItem) return;
+
+    isProcessingRef.current = true;
+    const itemId = nextItem.id;
 
     try {
-      // 1. Pre-process media (Extract audio from video, downsample)
-      setProcessingStatus('Optimizing Media (Extracting Audio)...');
-      
-      let fileToUpload: File | Blob = activeFile;
-      if (activeFile instanceof File) {
-         fileToUpload = await processMediaFile(activeFile);
-      }
-      
-      setProcessingStatus('Uploading & Transcribing...');
-      
-      // 2. Transcribe with Progress Callback
-      const text = await transcribeAudio(
-        fileToUpload, 
-        '', 
-        settings, 
-        (progress) => {
-            setUploadProgress(progress);
-            if (progress === 100) {
-                setProcessingStatus('Analyzing & Transcribing...');
-            } else {
-                setProcessingStatus(`Uploading Evidence (${progress}%)...`);
+        // 1. OPTIMIZE / CONVERT
+        updateItem(itemId, { status: 'PROCESSING', stage: 'Optimizing Media', progress: 5 });
+        
+        let fileToUpload: File | Blob = nextItem.file;
+        // Run everything through processor (handles video->audio and large file checks)
+        fileToUpload = await processMediaFile(nextItem.file);
+        
+        // 2. TRANSCRIBE
+        updateItem(itemId, { stage: 'Uploading Evidence', progress: 15 });
+        
+        const text = await transcribeAudio(
+            fileToUpload,
+            '',
+            settings,
+            (pct) => {
+                // Map upload progress (0-100) to total progress (15-90)
+                const mappedProgress = 15 + Math.round(pct * 0.75);
+                updateItem(itemId, { 
+                    stage: pct === 100 ? 'Analyzing & Transcribing...' : `Uploading (${pct}%)`, 
+                    progress: mappedProgress 
+                });
             }
-        }
-      );
-      
-      setTranscription(text);
-      setStatus(TranscriptionStatus.COMPLETED);
+        );
+
+        updateItem(itemId, { status: 'COMPLETED', progress: 100, transcript: text });
+
     } catch (error: any) {
-      console.error(error);
-      setStatus(TranscriptionStatus.ERROR);
-      setErrorMsg(error.message || "An unknown error occurred");
+        console.error(`Error processing file ${nextItem.file.name}:`, error);
+        updateItem(itemId, { status: 'ERROR', error: error.message || 'Processing Failed' });
+    } finally {
+        isProcessingRef.current = false;
+        // Recursively call to process next item
+        processQueue();
     }
   };
 
-  const reset = () => {
-      setActiveFile(null);
-      setTranscription('');
-      setStatus(TranscriptionStatus.IDLE);
-      setErrorMsg('');
-      setUploadProgress(0);
-      localStorage.removeItem('whisper_current_session');
+  // Trigger processing whenever queue changes
+  useEffect(() => {
+    processQueue();
+  }, [queue, settings]); // Re-run if queue changes
+
+  // --- HANDLERS ---
+
+  const handleDownloadAll = () => {
+      const completed = queue.filter(i => i.status === 'COMPLETED' && i.transcript);
+      if (completed.length === 0) return;
+
+      const combinedText = completed.map(i => {
+          return `--- FILE: ${i.file.name} ---\n\n${i.transcript}\n\n`;
+      }).join('\n========================================\n\n');
+
+      downloadFile(combinedText, generateFilename('All_Transcripts', 'txt'), 'text/plain');
+  };
+
+  const resetQueue = () => {
+      if (confirm("Clear all files and results?")) {
+          setQueue([]);
+          setViewingItemId(null);
+          setMode(AppMode.RECORD); // Go back to default
+      }
   }
 
-  useEffect(() => {
-    if (status !== TranscriptionStatus.COMPLETED) {
-        reset();
-    }
-  }, [mode]);
+  // --- RENDER HELPERS ---
+
+  const viewingItem = viewingItemId ? queue.find(i => i.id === viewingItemId) : null;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 selection:bg-indigo-500/30">
       <Header 
         currentMode={mode} 
         setMode={(m) => {
-            if (status === TranscriptionStatus.COMPLETED) reset();
-            setMode(m);
+             // If switching to Record, we just show recorder. Queue stays in background unless cleared.
+             setMode(m);
+             setViewingItemId(null);
         }} 
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
@@ -164,124 +195,94 @@ const App: React.FC = () => {
         onSave={handleSaveSettings}
       />
 
-      <main className="max-w-5xl mx-auto px-4 py-12 flex flex-col items-center">
+      <main className="max-w-6xl mx-auto px-4 py-12 flex flex-col items-center">
         
-        {/* Intro Text */}
-        {!activeFile && status === TranscriptionStatus.IDLE && (
-            <div className="text-center mb-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                <h2 className="text-4xl md:text-5xl font-bold tracking-tight text-white mb-4">
-                    Turn voice into evidence.
-                </h2>
-                <p className="text-lg text-zinc-400 max-w-2xl mx-auto">
-                    Record proceedings or upload large video/audio files. 
-                    <span className="block mt-2 text-sm text-zinc-500">
-                        Smart Engine automatically extracts audio from video for faster processing.
-                    </span>
-                </p>
-            </div>
-        )}
-
-        {/* Input Section */}
-        <div className={`w-full transition-all duration-500 ${status === TranscriptionStatus.COMPLETED ? 'hidden' : 'block'}`}>
-            {mode === AppMode.RECORD ? (
-              <AudioRecorder 
-                onRecordingComplete={handleRecordingComplete} 
-                status={status} 
-                autoDownload={settings.autoDownloadAudio}
-              />
-            ) : (
-              <FileUploader onFileSelect={handleFileSelect} />
-            )}
-        </div>
-
-        {/* Action Button */}
-        {activeFile && status === TranscriptionStatus.IDLE && (
-            <div className="mt-8 flex flex-col items-center gap-4 animate-in zoom-in fade-in duration-300">
-                <div className="flex items-center gap-2 px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full text-xs text-zinc-400">
-                    <div className={`w-2 h-2 rounded-full ${settings.provider === TranscriptionProvider.GEMINI ? 'bg-blue-500' : settings.provider === TranscriptionProvider.OPENAI ? 'bg-green-500' : 'bg-purple-500'}`}></div>
-                    Using: <span className="font-medium text-zinc-200">{settings.provider}</span>
-                    {settings.legalMode && (
-                        <>
-                            <span className="text-zinc-700">|</span>
-                            <ShieldCheck size={12} className="text-indigo-400" />
-                            <span className="text-indigo-400 font-medium">Legal Mode</span>
-                        </>
-                    )}
-                </div>
-
-                <button
-                    onClick={handleStartTranscription}
-                    className="group flex items-center gap-3 px-8 py-4 bg-white text-black rounded-full text-lg font-semibold hover:bg-zinc-200 transition-all shadow-[0_0_40px_-10px_rgba(255,255,255,0.3)] hover:shadow-[0_0_60px_-15px_rgba(255,255,255,0.4)]"
+        {/* VIEW: RESULT DETAIL */}
+        {viewingItem && viewingItem.transcript ? (
+            <div className="w-full animate-in slide-in-from-right duration-300">
+                <button 
+                    onClick={() => setViewingItemId(null)}
+                    className="mb-6 flex items-center gap-2 text-zinc-400 hover:text-white transition-colors"
                 >
-                    Start Processing
-                    <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
+                    <ArrowLeft size={18} /> Back to Batch Queue
                 </button>
+                <h2 className="text-2xl font-bold text-white mb-6 px-1">{viewingItem.file.name}</h2>
+                <TranscriptionResult text={viewingItem.transcript} audioFile={viewingItem.file} />
             </div>
-        )}
-
-        {/* Processing State */}
-        {status === TranscriptionStatus.PROCESSING && (
-            <div className="mt-12 flex flex-col items-center animate-in fade-in duration-500 w-full max-w-md">
-                <div className="relative">
-                    <div className="absolute inset-0 bg-indigo-500 blur-xl opacity-20 animate-pulse rounded-full"></div>
-                    <Loader2 size={48} className="text-indigo-500 animate-spin relative z-10" />
-                </div>
-                <h3 className="mt-6 text-xl font-medium text-white">
-                    {processingStatus || 'Processing...'}
-                </h3>
-                
-                {/* Upload Progress Bar */}
-                {uploadProgress > 0 && uploadProgress < 100 && (
-                    <div className="w-full mt-4 space-y-2">
-                        <div className="flex justify-between text-xs text-zinc-400">
-                            <span>Uploading...</span>
-                            <span>{uploadProgress}%</span>
-                        </div>
-                        <div className="w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
-                            <div 
-                                className="h-full bg-indigo-500 rounded-full transition-all duration-300 ease-out" 
-                                style={{ width: `${uploadProgress}%` }}
-                            ></div>
-                        </div>
+        ) : (
+            // VIEW: MAIN CONTENT
+            <>
+                {/* Intro (Only show if queue is empty and recording mode) */}
+                {queue.length === 0 && mode === AppMode.RECORD && (
+                    <div className="text-center mb-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+                        <h2 className="text-4xl md:text-5xl font-bold tracking-tight text-white mb-4">
+                            Turn voice into evidence.
+                        </h2>
+                        <p className="text-lg text-zinc-400 max-w-2xl mx-auto">
+                            Record proceedings or process massive folders of video evidence.
+                            <span className="block mt-2 text-sm text-zinc-500">
+                                Smart Engine auto-extracts audio from video to bypass limits.
+                            </span>
+                        </p>
                     </div>
                 )}
 
-                <p className="text-zinc-500 mt-4 text-sm text-center">
-                   Large files are processed securely via Google Gemini. Please keep this tab open.
-                </p>
-            </div>
-        )}
-
-        {/* Error State */}
-        {status === TranscriptionStatus.ERROR && (
-             <div className="mt-8 p-4 bg-red-950/30 border border-red-900/50 rounded-xl text-red-200 flex items-start gap-3 max-w-lg">
-                 <AlertTriangle className="shrink-0 mt-0.5" size={20} />
-                 <div>
-                    <p className="font-medium">Transcription Failed</p>
-                    <p className="text-sm opacity-80 mt-1">{errorMsg}</p>
-                    <button onClick={reset} className="mt-3 text-sm underline hover:text-white">Try Again</button>
-                 </div>
-             </div>
-        )}
-
-        {/* Results Section */}
-        {status === TranscriptionStatus.COMPLETED && (
-             <div className="w-full mt-4">
-                <div className="flex justify-between items-end mb-6">
-                     <div>
-                        <h2 className="text-2xl font-bold text-white">Transcription Complete</h2>
-                        {settings.legalMode && (
-                            <p className="text-xs text-indigo-400 mt-1 flex items-center gap-1">
-                                <ShieldCheck size={12} /> Verbatim format with timestamps
-                            </p>
+                {/* Mode Switcher Content */}
+                {queue.length === 0 && (
+                    <div className="w-full">
+                        {mode === AppMode.RECORD ? (
+                            <AudioRecorder 
+                                onRecordingComplete={handleRecordingComplete} 
+                                status={TranscriptionStatus.IDLE}
+                                autoDownload={settings.autoDownloadAudio}
+                            />
+                        ) : (
+                            <FileUploader 
+                                onFilesSelect={handleFilesSelect}
+                                onDriveSelect={handleDriveSelect}
+                                isDriveLoading={isDriveLoading} 
+                            />
                         )}
+                    </div>
+                )}
+
+                {/* Queue View (If items exist) */}
+                {queue.length > 0 && (
+                     <div className="w-full">
+                        <div className="flex justify-between items-center mb-6">
+                             {/* Add More Button */}
+                             {mode === AppMode.UPLOAD && (
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={resetQueue}
+                                        className="text-sm text-zinc-500 hover:text-red-400 px-3 py-2"
+                                    >
+                                        Clear Queue
+                                    </button>
+                                </div>
+                             )}
+                        </div>
+
+                        <BatchQueue 
+                            queue={queue}
+                            onViewResult={(item) => setViewingItemId(item.id)}
+                            onDownloadAll={handleDownloadAll}
+                        />
+
+                        {/* Dropzone for adding more files (Mini) */}
+                         <div className="mt-8 pt-8 border-t border-zinc-900">
+                             <p className="text-center text-zinc-600 text-sm mb-4">Need to add more files?</p>
+                             <div className="max-w-md mx-auto opacity-50 hover:opacity-100 transition-opacity">
+                                <FileUploader 
+                                    onFilesSelect={handleFilesSelect}
+                                    onDriveSelect={handleDriveSelect}
+                                    isDriveLoading={isDriveLoading}
+                                />
+                             </div>
+                         </div>
                      </div>
-                     <button onClick={reset} className="text-sm text-zinc-500 hover:text-white transition-colors">
-                        Start Over
-                     </button>
-                </div>
-                <TranscriptionResult text={transcription} audioFile={activeFile} />
-             </div>
+                )}
+            </>
         )}
 
       </main>
