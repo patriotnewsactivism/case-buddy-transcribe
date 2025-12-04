@@ -30,13 +30,13 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
   if (!isOpen) return null;
 
   const handleSave = () => {
-    // Sanitize inputs on save
+    // Sanitize inputs on save (with null/undefined safety)
     const sanitizedSettings = {
         ...localSettings,
-        openaiKey: localSettings.openaiKey.trim(),
-        assemblyAiKey: localSettings.assemblyAiKey.trim(),
-        googleClientId: localSettings.googleClientId.trim(),
-        googleApiKey: localSettings.googleApiKey.trim(),
+        openaiKey: (localSettings.openaiKey || '').trim(),
+        assemblyAiKey: (localSettings.assemblyAiKey || '').trim(),
+        googleClientId: (localSettings.googleClientId || '').trim(),
+        googleApiKey: (localSettings.googleApiKey || '').trim(),
     };
     onSave(sanitizedSettings);
     onClose();
