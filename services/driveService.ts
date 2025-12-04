@@ -4,30 +4,43 @@
 const DISCOVERY_DOCS = ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'];
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 
-let gapiInited = false;
-let gisInited = false;
 let tokenClient: any = null;
 
 /**
- * Dynamically loads the Google API scripts
+ * Dynamically loads the Google API scripts and ensures the Picker library is ready
  */
 export const loadGoogleScripts = () => {
-  return new Promise<void>((resolve) => {
-    if (window.gapi && window.google) {
+  return new Promise<void>((resolve, reject) => {
+    // Helper to load GAPI libraries
+    const loadGapiLibs = () => {
+        if (!window.gapi) {
+            reject(new Error("Google API Script failed to load."));
+            return;
+        }
+        window.gapi.load('client:picker', () => {
+            if (window.google) resolve();
+        });
+    };
+
+    // 1. If scripts are already loaded and Picker is available, we are good.
+    if (window.gapi && window.google && window.google.picker) {
         resolve();
         return;
     }
 
+    // 2. If GAPI exists but not Picker, force load libs
+    if (window.gapi && (!window.google || !window.google.picker)) {
+        loadGapiLibs();
+        return;
+    }
+
+    // 3. Load scripts from scratch
     const script1 = document.createElement('script');
     script1.src = 'https://apis.google.com/js/api.js';
     script1.async = true;
     script1.defer = true;
-    script1.onload = () => {
-        gapi.load('client:picker', async () => {
-            gapiInited = true;
-            if (gisInited) resolve();
-        });
-    };
+    script1.onload = loadGapiLibs;
+    script1.onerror = () => reject(new Error("Failed to load gapi script"));
     document.body.appendChild(script1);
 
     const script2 = document.createElement('script');
@@ -35,9 +48,9 @@ export const loadGoogleScripts = () => {
     script2.async = true;
     script2.defer = true;
     script2.onload = () => {
-        gisInited = true;
-        if (gapiInited) resolve();
+        // Just ensure google global is ready
     };
+    script2.onerror = () => reject(new Error("Failed to load GIS script"));
     document.body.appendChild(script2);
   });
 };
@@ -54,17 +67,14 @@ export const initGoogleClient = async (clientId: string, apiKey: string) => {
         await new Promise<void>((resolve) => gapi.load('client', resolve));
     }
 
-    // Wrap initialization in a timeout to prevent infinite hanging
-    const initPromise = gapi.client.init({
-        apiKey: apiKey,
-        discoveryDocs: DISCOVERY_DOCS,
-    });
-
-    const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("Google API Initialization timed out. Check your network or API Key restrictions.")), 15000)
-    );
-
-    await Promise.race([initPromise, timeoutPromise]);
+    try {
+        await gapi.client.init({
+            apiKey: apiKey,
+            discoveryDocs: DISCOVERY_DOCS,
+        });
+    } catch (e: any) {
+        throw new Error(`GAPI Init Failed: ${e?.result?.error?.message || e.message || 'Unknown error'}`);
+    }
 
     tokenClient = google.accounts.oauth2.initTokenClient({
         client_id: clientId,
@@ -141,22 +151,34 @@ const listFilesRecursive = async (folderId: string, accessToken: string, onProgr
  * Opens the Google Drive Picker
  */
 export const openDrivePicker = (
-    clientId: string, 
-    apiKey: string, 
+    clientIdRaw: string, 
+    apiKeyRaw: string, 
     onProgress?: (msg: string) => void
 ): Promise<File[]> => {
     return new Promise((resolve, reject) => {
+        // 1. SANITIZE INPUTS
+        const clientId = clientIdRaw?.trim();
+        const apiKey = apiKeyRaw?.trim();
+
+        if (!clientId || !apiKey) {
+             reject(new Error("Missing credentials."));
+             return;
+        }
+
+        // 2. LOAD SCRIPTS
         console.log("Loading Google Scripts...");
         if (onProgress) onProgress("Initializing Google API...");
         
         loadGoogleScripts().then(async () => {
             try {
+                // 3. INIT CLIENT
                 if (!tokenClient) {
                     await initGoogleClient(clientId, apiKey);
                 }
 
                 if (onProgress) onProgress("Waiting for login...");
 
+                // 4. REQUEST TOKEN
                 tokenClient.callback = async (resp: any) => {
                     if (resp.error !== undefined) {
                         console.error("OAuth Error:", resp);
@@ -164,7 +186,7 @@ export const openDrivePicker = (
                         return;
                     }
 
-                    // CRITICAL FIX: Manually sync the token to gapi client for library calls
+                    // Sync token to gapi
                     if (gapi.client) {
                         gapi.client.setToken(resp);
                     }
@@ -173,9 +195,22 @@ export const openDrivePicker = (
                     try {
                         if (onProgress) onProgress("Opening Picker...");
                         
-                        // EXTRACT NUMERIC PROJECT ID
-                        const appId = clientId.split('-')[0]; 
+                        // 5. EXTRACT APP ID
+                        // Client ID format: 123456789-abcdefg.apps.googleusercontent.com
+                        // The App ID is the "123456789" part.
+                        const appIdParts = clientId.split('-');
+                        if (appIdParts.length < 2) {
+                            throw new Error("Invalid Client ID format. It should look like '123456-abcde.apps.googleusercontent.com'");
+                        }
+                        const appId = appIdParts[0]; 
+                        
                         const origin = window.location.protocol + '//' + window.location.host;
+
+                        // 6. BUILD PICKER
+                        // We check for google.picker existence one last time
+                        if (!window.google || !window.google.picker) {
+                            throw new Error("Google Picker library failed to load. Please refresh the page.");
+                        }
 
                         const pickerBuilder = new google.picker.PickerBuilder()
                             .setDeveloperKey(apiKey)
@@ -221,9 +256,16 @@ export const openDrivePicker = (
                         const picker = pickerBuilder.build();
                         picker.setVisible(true);
 
-                    } catch (buildError) {
+                    } catch (buildError: any) {
                         console.error("Picker Build Error:", buildError);
-                        reject(new Error("Failed to build Google Picker. Please ensure 'Google Picker API' is enabled in Cloud Console."));
+                        let msg = "Failed to build Google Picker.";
+                        if (buildError.message && buildError.message.includes("Feature not enabled")) {
+                            msg += " Please verify 'Google Picker API' is enabled in your Cloud Project.";
+                        } else {
+                             msg += ` Details: ${buildError.message || JSON.stringify(buildError)}`;
+                             msg += "\n\nTip: Ensure Client ID and API Key belong to the SAME Google Cloud Project.";
+                        }
+                        reject(new Error(msg));
                     }
                 };
 
