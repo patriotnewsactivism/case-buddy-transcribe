@@ -5,61 +5,75 @@ let tokenClient: any = null;
 
 /**
  * Dynamically loads the Google API scripts (GAPI and GIS)
+ * Ensures 'picker' library is strictly loaded into GAPI.
  */
 export const loadGoogleScripts = () => {
   return new Promise<void>((resolve, reject) => {
-    let gapiLoaded = false;
-    let gisLoaded = false;
+    let pickerReady = false;
+    let gisReady = false;
 
     const checkDone = () => {
-        if (gapiLoaded && gisLoaded) resolve();
+        if (pickerReady && gisReady) resolve();
     };
 
-    // 1. Load GAPI (for Picker)
-    if (window.gapi) {
-        gapiLoaded = true;
-        checkDone();
-    } else {
-        const script1 = document.createElement('script');
-        script1.src = 'https://apis.google.com/js/api.js';
-        script1.async = true;
-        script1.defer = true;
-        script1.onload = () => {
-            // Load the picker library specifically
-            window.gapi.load('picker', () => {
-                gapiLoaded = true;
+    // --- 1. Load GAPI & Picker ---
+    const onGapiLoaded = () => {
+        if (!window.gapi) {
+            reject(new Error("GAPI loaded but window.gapi is undefined"));
+            return;
+        }
+        // Force load picker library every time
+        window.gapi.load('picker', {
+            callback: () => {
+                pickerReady = true;
                 checkDone();
-            });
-        };
-        script1.onerror = () => reject(new Error("Failed to load Google API script"));
-        document.body.appendChild(script1);
+            },
+            onerror: () => reject(new Error("Failed to load Google Picker library (Network or CORS issue)"))
+        });
+    };
+
+    if (window.gapi) {
+        onGapiLoaded();
+    } else {
+        const script = document.createElement('script');
+        script.src = 'https://apis.google.com/js/api.js';
+        script.async = true;
+        script.defer = true;
+        script.onload = onGapiLoaded;
+        script.onerror = () => reject(new Error("Failed to load Google API script (api.js)"));
+        document.body.appendChild(script);
     }
 
-    // 2. Load GIS (for OAuth)
+    // --- 2. Load GIS (Identity Services) ---
+    const onGisLoaded = () => {
+         if (window.google && window.google.accounts) {
+             gisReady = true;
+             checkDone();
+         } else {
+             reject(new Error("GIS loaded but window.google.accounts is undefined"));
+         }
+    };
+
     if (window.google && window.google.accounts) {
-        gisLoaded = true;
+        gisReady = true;
         checkDone();
     } else {
-        const script2 = document.createElement('script');
-        script2.src = 'https://accounts.google.com/gsi/client';
-        script2.async = true;
-        script2.defer = true;
-        script2.onload = () => {
-            gisLoaded = true;
-            checkDone();
-        };
-        script2.onerror = () => reject(new Error("Failed to load Google Identity Services script"));
-        document.body.appendChild(script2);
+        const script = document.createElement('script');
+        script.src = 'https://accounts.google.com/gsi/client';
+        script.async = true;
+        script.defer = true;
+        script.onload = onGisLoaded;
+        script.onerror = () => reject(new Error("Failed to load Google Identity Services script"));
+        document.body.appendChild(script);
     }
   });
 };
 
 /**
  * Initializes the Token Client (OAuth) ONLY. 
- * Does NOT initialize the full gapi.client to avoid 'GAPI Init Failed' errors.
  */
 const initTokenClient = (clientId: string) => {
-    if (tokenClient) return; // Already inited
+    if (tokenClient) return; 
 
     if (!window.google || !window.google.accounts) {
         throw new Error("Google Identity Services not loaded.");
@@ -92,8 +106,7 @@ const downloadDriveFile = async (fileId: string, fileName: string, mimeType: str
 };
 
 /**
- * Recursively lists audio/video files using standard fetch
- * Note: explicitly takes apiKey since we aren't using gapi.client
+ * Recursively lists audio/video files
  */
 const listFilesRecursive = async (folderId: string, accessToken: string, apiKey: string, onProgress?: (msg: string) => void): Promise<File[]> => {
     const filesFound: File[] = [];
@@ -104,7 +117,7 @@ const listFilesRecursive = async (folderId: string, accessToken: string, apiKey:
         const params = new URLSearchParams({
             q: query,
             fields: 'nextPageToken, files(id, name, mimeType)',
-            key: apiKey // Pass the API key explicitly
+            key: apiKey
         });
         if (pageToken) params.append('pageToken', pageToken);
 
@@ -177,8 +190,14 @@ export const openDrivePicker = (
                     try {
                         if (onProgress) onProgress("Opening Picker...");
                         
-                        // Extract App ID (Numeric part of Client ID)
-                        const appId = clientId.split('-')[0]; 
+                        // Extract App ID safely
+                        let appId = '';
+                        try {
+                           appId = clientId.split('-')[0];
+                        } catch(e) {
+                           console.warn("Could not extract App ID from Client ID. Picker might fail if projects mismatch.");
+                        }
+                        
                         const origin = window.location.protocol + '//' + window.location.host;
 
                         // Check Picker Lib
@@ -189,12 +208,16 @@ export const openDrivePicker = (
                         // 5. BUILD PICKER
                         const pickerBuilder = new google.picker.PickerBuilder()
                             .setDeveloperKey(apiKey)
-                            .setAppId(appId)
                             .setOAuthToken(accessToken)
                             .setOrigin(origin)
                             .addView(new google.picker.DocsView().setIncludeFolders(true).setSelectFolderEnabled(true))
                             .addView(google.picker.ViewId.DOCS_AUDIO)
                             .addView(google.picker.ViewId.DOCS_VIDEO);
+                        
+                        // Only set AppId if we successfully extracted it
+                        if (appId) {
+                            pickerBuilder.setAppId(appId);
+                        }
 
                         pickerBuilder.setCallback(async (data: any) => {
                             if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
