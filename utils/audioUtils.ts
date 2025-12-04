@@ -85,28 +85,32 @@ export const encodeWAV = (samples: Float32Array, sampleRate: number = 16000) => 
  * 3. Returns a compact WAV Blob.
  */
 export const processMediaFile = async (file: File): Promise<Blob> => {
-    // 1. FAST PATH: Small audio files (< 10MB)
+    // 1. FAST PATH: Small audio files (< 10MB) don't need processing
     if (file.type.startsWith('audio/') && file.size < 10 * 1024 * 1024) {
         return file;
     }
 
-    // 2. SAFETY PATH: Huge files (> 300MB)
-    // Decoding >300MB into memory can crash the browser tab (OOM).
-    // In this case, we skip client-side conversion and upload the original file directly to Gemini.
-    if (file.size > 300 * 1024 * 1024) {
-        console.warn("File too large for client-side processing, skipping conversion.");
+    // 2. SAFETY LIMIT: Browser Memory Cap (~1.8 GB)
+    // Most browsers crash if you try to load > 2GB into an ArrayBuffer.
+    // If the file is massive, we skip client-side extraction and upload the original.
+    const MAX_SAFE_SIZE = 1.8 * 1024 * 1024 * 1024; // 1.8 GB
+    
+    if (file.size > MAX_SAFE_SIZE) {
+        console.warn(`File size (${(file.size / 1024 / 1024).toFixed(0)}MB) exceeds browser memory safety limit. Uploading original file directly.`);
         return file;
     }
 
-    // 3. CONVERSION PATH: Standard large files (10MB - 300MB)
+    // 3. CONVERSION PATH: Extract audio from video/audio file
     try {
+        // This line is the memory bottleneck. It reads the file into RAM.
         const arrayBuffer = await file.arrayBuffer();
+        
         const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
         
-        // This step strips video and decodes audio to raw PCM
+        // This decodes the raw audio data (CPU intensive but fast)
         const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
         
-        // Offline rendering to resample to 16kHz Mono
+        // Resample to 16kHz Mono (Standard for Speech AI)
         const targetRate = 16000;
         const offlineCtx = new OfflineAudioContext(1, audioBuffer.duration * targetRate, targetRate);
         
@@ -118,9 +122,12 @@ export const processMediaFile = async (file: File): Promise<Blob> => {
         const renderedBuffer = await offlineCtx.startRendering();
         const channelData = renderedBuffer.getChannelData(0); // Get Mono Channel
         
+        // Encode to WAV (which is much smaller than raw video)
         return encodeWAV(channelData, targetRate);
+
     } catch (e) {
-        console.warn("Fast audio conversion failed, falling back to original file.", e);
-        return file; // Fallback to original if decoding fails (e.g. corrupt header)
+        // Fallback catch-all: If memory allocation fails or codec is unsupported
+        console.warn("Client-side audio conversion failed (likely Out of Memory). Falling back to original file upload.", e);
+        return file; 
     }
 };

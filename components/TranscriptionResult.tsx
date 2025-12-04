@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Copy, Check, FileText, Wand2, Languages, Users, Download, Printer, ChevronDown, Music } from 'lucide-react';
+import { Copy, Check, FileText, Wand2, Languages, Users, Download, Printer, ChevronDown, Music, Edit3, Save } from 'lucide-react';
 import { summarizeText, translateText } from '../services/geminiService';
 import { downloadFile, generateFilename, printLegalDocument } from '../utils/fileUtils';
 
@@ -10,6 +10,7 @@ interface TranscriptionResultProps {
 
 const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initialText, audioFile }) => {
   const [displayText, setDisplayText] = useState(initialText);
+  const [isEditing, setIsEditing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
   const [translation, setTranslation] = useState<string | null>(null);
@@ -145,8 +146,22 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initial
         
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
            
+           {/* Edit Toggle */}
+           <button
+             onClick={() => setIsEditing(!isEditing)}
+             className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all
+               ${isEditing
+                 ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' 
+                 : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}`}
+           >
+             {isEditing ? <Save size={14} /> : <Edit3 size={14} />}
+             {isEditing ? 'Done Editing' : 'Edit Text'}
+           </button>
+
+           <div className="w-px h-6 bg-zinc-800 mx-1 hidden md:block"></div>
+
            {/* Speaker Toggle */}
-           {detectedSpeakers.length > 0 && (
+           {detectedSpeakers.length > 0 && !isEditing && (
                 <button
                     onClick={() => setShowSpeakerTools(!showSpeakerTools)}
                     className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all
@@ -158,8 +173,6 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initial
                     {showSpeakerTools ? 'Hide Speakers' : 'Identify Speakers'}
                 </button>
            )}
-
-           <div className="w-px h-6 bg-zinc-800 mx-1 hidden md:block"></div>
 
            <button
             onClick={handleSummarize}
@@ -219,7 +232,7 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initial
       </div>
 
       {/* Speaker Renaming Panel */}
-      {showSpeakerTools && detectedSpeakers.length > 0 && (
+      {showSpeakerTools && detectedSpeakers.length > 0 && !isEditing && (
           <div className="p-4 bg-indigo-950/20 border border-indigo-900/50 rounded-xl animate-in slide-in-from-top-2">
               <h4 className="text-xs font-semibold text-indigo-300 uppercase tracking-wider mb-3">
                   Map Speaker Labels to Real Names
@@ -248,14 +261,25 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initial
           <div className={`p-6 bg-zinc-900 rounded-2xl border border-zinc-800 shadow-sm ${summary || translation ? '' : 'md:col-span-2'}`}>
             <div className="flex justify-between items-center mb-4">
                 <h3 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider">Original Text</h3>
-                <button onClick={handleCopy} className="text-xs text-zinc-500 hover:text-zinc-300 flex items-center gap-1">
-                    {copied ? <Check size={12}/> : <Copy size={12}/>} {copied ? 'Copied' : 'Copy Text'}
-                </button>
+                <div className="flex items-center gap-3">
+                    {isEditing && <span className="text-xs text-blue-400 font-medium animate-pulse">Editing...</span>}
+                    <button onClick={handleCopy} className="text-xs text-zinc-500 hover:text-zinc-300 flex items-center gap-1">
+                        {copied ? <Check size={12}/> : <Copy size={12}/>} {copied ? 'Copied' : 'Copy Text'}
+                    </button>
+                </div>
             </div>
             <div className="prose prose-invert prose-zinc max-w-none">
-              <p className="whitespace-pre-wrap leading-relaxed text-zinc-100 font-mono text-sm md:text-base">
-                {displayText}
-              </p>
+              {isEditing ? (
+                  <textarea
+                    value={displayText}
+                    onChange={(e) => setDisplayText(e.target.value)}
+                    className="w-full h-[500px] bg-zinc-950/50 border border-zinc-700 rounded-lg p-4 font-mono text-sm md:text-base text-zinc-100 focus:outline-none focus:border-indigo-500 resize-y"
+                  />
+              ) : (
+                  <p className="whitespace-pre-wrap leading-relaxed text-zinc-100 font-mono text-sm md:text-base">
+                    {displayText}
+                  </p>
+              )}
             </div>
           </div>
 

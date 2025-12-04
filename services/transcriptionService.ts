@@ -9,7 +9,7 @@ const waitForFileActive = async (fileUri: string, apiKey: string): Promise<void>
     const fileId = fileUri.split('/').pop();
     if (!fileId) return;
 
-    const maxAttempts = 60; // Wait up to 2 minutes (2s * 60)
+    const maxAttempts = 120; // Wait up to 4 minutes for very large files
     let attempt = 0;
 
     while (attempt < maxAttempts) {
@@ -29,13 +29,14 @@ const waitForFileActive = async (fileUri: string, apiKey: string): Promise<void>
         attempt++;
     }
     
-    throw new Error("File processing timed out.");
+    throw new Error("File processing timed out. The file might be too large or the service is busy.");
 };
 
 // --- GEMINI IMPLEMENTATION ---
 const transcribeWithGemini = async (
   file: Blob | File,
-  settings: TranscriptionSettings
+  settings: TranscriptionSettings,
+  onProgress?: (percent: number) => void
 ): Promise<string> => {
   const API_KEY = process.env.API_KEY || '';
   if (!API_KEY) throw new Error("Missing Gemini API Key in environment.");
@@ -60,11 +61,16 @@ const transcribeWithGemini = async (
     `;
   }
 
-  // --- LARGE FILE HANDLING ---
-  // If file is > 18MB (safe margin below 20MB limit), we MUST use the File API.
-  if (file.size > 18 * 1024 * 1024) {
+  // --- LARGE FILE HANDLING (File API) ---
+  // We use the File API for anything over 10MB to be absolutely safe and avoid the 20MB payload limit.
+  // The File API supports up to 2GB.
+  const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024; // 10 MB
+
+  if (file.size > LARGE_FILE_THRESHOLD) {
     try {
-        // 1. Upload the file to Google's temporary GenAI storage
+        if (onProgress) onProgress(1); // Start progress indication
+
+        // 1. Initiate Resumable Upload
         const uploadResponse = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
             method: 'POST',
             headers: {
@@ -80,21 +86,41 @@ const transcribeWithGemini = async (
         const uploadUrl = uploadResponse.headers.get('X-Goog-Upload-URL');
         if (!uploadUrl) throw new Error("Failed to initiate large file upload.");
 
-        // 2. Perform the actual bytes transfer
-        const bytesResponse = await fetch(uploadUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Length': file.size.toString(),
-                'X-Goog-Upload-Offset': '0',
-                'X-Goog-Upload-Command': 'upload, finalize'
-            },
-            body: file
-        });
-        
-        const fileData = await bytesResponse.json();
-        const fileUri = fileData.file.uri;
+        // 2. Upload Bytes with Progress Tracking via XHR
+        const fileUri = await new Promise<string>((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', uploadUrl);
+            xhr.setRequestHeader('Content-Length', file.size.toString());
+            xhr.setRequestHeader('X-Goog-Upload-Offset', '0');
+            xhr.setRequestHeader('X-Goog-Upload-Command', 'upload, finalize');
 
-        // 3. Wait for file to be active (Critical for large video files)
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable && onProgress) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    onProgress(percent);
+                }
+            };
+
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        const fileData = JSON.parse(xhr.responseText);
+                        resolve(fileData.file.uri);
+                    } catch (err) {
+                        reject(new Error("Failed to parse upload response"));
+                    }
+                } else {
+                    reject(new Error(`Upload failed with status ${xhr.status}`));
+                }
+            };
+
+            xhr.onerror = () => reject(new Error("Network Error during upload"));
+            xhr.send(file);
+        });
+
+        if (onProgress) onProgress(100);
+
+        // 3. Wait for file to be active (Server-side processing)
         await waitForFileActive(fileUri, API_KEY);
 
         // 4. Generate Content using the File URI
@@ -115,7 +141,7 @@ const transcribeWithGemini = async (
     }
   } 
   
-  // --- STANDARD SMALL FILE HANDLING ---
+  // --- STANDARD SMALL FILE HANDLING (< 10MB) ---
   else {
       const base64Audio = await fileToBase64(file);
       const mimeType = file.type || 'audio/webm';
@@ -230,7 +256,8 @@ const transcribeWithAssemblyAI = async (
 export const transcribeAudio = async (
   file: File | Blob,
   base64: string,
-  settings: TranscriptionSettings
+  settings: TranscriptionSettings,
+  onProgress?: (percent: number) => void
 ): Promise<string> => {
   switch (settings.provider) {
     case TranscriptionProvider.OPENAI:
@@ -239,6 +266,6 @@ export const transcribeAudio = async (
       return await transcribeWithAssemblyAI(file, settings.assemblyAiKey, settings);
     case TranscriptionProvider.GEMINI:
     default:
-      return await transcribeWithGemini(file, settings);
+      return await transcribeWithGemini(file, settings, onProgress);
   }
 };

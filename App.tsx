@@ -23,6 +23,7 @@ const App: React.FC = () => {
   const [transcription, setTranscription] = useState<string>('');
   const [activeFile, setActiveFile] = useState<File | Blob | null>(null);
   const [processingStatus, setProcessingStatus] = useState<string>('');
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
   
   // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -76,6 +77,7 @@ const App: React.FC = () => {
     setStatus(TranscriptionStatus.IDLE);
     setTranscription('');
     setErrorMsg('');
+    setUploadProgress(0);
   };
 
   const handleRecordingComplete = (blob: Blob) => {
@@ -83,6 +85,7 @@ const App: React.FC = () => {
     setStatus(TranscriptionStatus.IDLE);
     setTranscription('');
     setErrorMsg('');
+    setUploadProgress(0);
   };
 
   const handleStartTranscription = async () => {
@@ -91,6 +94,7 @@ const App: React.FC = () => {
     setStatus(TranscriptionStatus.PROCESSING);
     setErrorMsg('');
     setProcessingStatus('Initializing...');
+    setUploadProgress(0);
 
     try {
       // 1. Pre-process media (Extract audio from video, downsample)
@@ -103,14 +107,20 @@ const App: React.FC = () => {
       
       setProcessingStatus('Uploading & Transcribing...');
       
-      // 2. Transcribe
-      // We pass null for base64 as the service now handles file processing internally for large files
-      // but we still pass it for small files logic inside service if needed, or we refactor service to ignore it.
-      // To be safe, we generate base64 only if needed inside service, but here we pass empty string as service handles it now
-      // or we can generate it here if strictly needed. 
-      // Current service uses file object for logic, so we pass empty string for base64 arg.
-      
-      const text = await transcribeAudio(fileToUpload, '', settings);
+      // 2. Transcribe with Progress Callback
+      const text = await transcribeAudio(
+        fileToUpload, 
+        '', 
+        settings, 
+        (progress) => {
+            setUploadProgress(progress);
+            if (progress === 100) {
+                setProcessingStatus('Analyzing & Transcribing...');
+            } else {
+                setProcessingStatus(`Uploading Evidence (${progress}%)...`);
+            }
+        }
+      );
       
       setTranscription(text);
       setStatus(TranscriptionStatus.COMPLETED);
@@ -126,6 +136,7 @@ const App: React.FC = () => {
       setTranscription('');
       setStatus(TranscriptionStatus.IDLE);
       setErrorMsg('');
+      setUploadProgress(0);
       localStorage.removeItem('whisper_current_session');
   }
 
@@ -210,7 +221,7 @@ const App: React.FC = () => {
 
         {/* Processing State */}
         {status === TranscriptionStatus.PROCESSING && (
-            <div className="mt-12 flex flex-col items-center animate-in fade-in duration-500">
+            <div className="mt-12 flex flex-col items-center animate-in fade-in duration-500 w-full max-w-md">
                 <div className="relative">
                     <div className="absolute inset-0 bg-indigo-500 blur-xl opacity-20 animate-pulse rounded-full"></div>
                     <Loader2 size={48} className="text-indigo-500 animate-spin relative z-10" />
@@ -218,8 +229,25 @@ const App: React.FC = () => {
                 <h3 className="mt-6 text-xl font-medium text-white">
                     {processingStatus || 'Processing...'}
                 </h3>
-                <p className="text-zinc-500 mt-2 text-sm max-w-md text-center">
-                  Depending on file size, we may be extracting audio tracks or uploading to secure storage. Please do not close the tab.
+                
+                {/* Upload Progress Bar */}
+                {uploadProgress > 0 && uploadProgress < 100 && (
+                    <div className="w-full mt-4 space-y-2">
+                        <div className="flex justify-between text-xs text-zinc-400">
+                            <span>Uploading...</span>
+                            <span>{uploadProgress}%</span>
+                        </div>
+                        <div className="w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
+                            <div 
+                                className="h-full bg-indigo-500 rounded-full transition-all duration-300 ease-out" 
+                                style={{ width: `${uploadProgress}%` }}
+                            ></div>
+                        </div>
+                    </div>
+                )}
+
+                <p className="text-zinc-500 mt-4 text-sm text-center">
+                   Large files are processed securely via Google Gemini. Please keep this tab open.
                 </p>
             </div>
         )}
