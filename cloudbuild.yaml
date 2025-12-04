@@ -17,11 +17,13 @@ steps:
   #   args: ['-m', 'rsync', '-r', '-c', '-d', './dist/', 'gs://YOUR_BUCKET_NAME/']
 
 # Artifacts to store (the built application)
-artifacts:
-  objects:
-    location: 'gs://$PROJECT_ID-build-artifacts'
-    paths:
-      - 'dist/**'
+# Note: The bucket must be created before enabling this section
+# Create bucket with: gsutil mb gs://$PROJECT_ID-build-artifacts
+# artifacts:
+#   objects:
+#     location: 'gs://$PROJECT_ID-build-artifacts'
+#     paths:
+#       - 'dist/**'
 
 # Build timeout
 timeout: '600s'
