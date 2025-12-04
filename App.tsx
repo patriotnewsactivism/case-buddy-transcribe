@@ -33,7 +33,7 @@ const App: React.FC = () => {
   const isProcessingRef = useRef(false);
 
   // Drive State
-  const [isDriveLoading, setIsDriveLoading] = useState(false);
+  const [driveLoadingState, setDriveLoadingState] = useState<string | null>(null);
 
   // Load settings
   useEffect(() => {
@@ -80,10 +80,12 @@ const App: React.FC = () => {
           return;
       }
 
-      setIsDriveLoading(true);
+      setDriveLoadingState("Connecting...");
       try {
           const files = await openDrivePicker(settings.googleClientId, settings.googleApiKey);
+          
           if (files.length > 0) {
+              setDriveLoadingState("Importing...");
               handleFilesSelect(files);
           }
       } catch (e: any) {
@@ -102,7 +104,7 @@ const App: React.FC = () => {
 
           alert(errorMessage);
       } finally {
-          setIsDriveLoading(false);
+          setDriveLoadingState(null);
       }
   };
 
@@ -253,7 +255,7 @@ const App: React.FC = () => {
                             <FileUploader 
                                 onFilesSelect={handleFilesSelect}
                                 onDriveSelect={handleDriveSelect}
-                                isDriveLoading={isDriveLoading} 
+                                driveLoadingState={driveLoadingState} 
                             />
                         )}
                     </div>
@@ -289,7 +291,7 @@ const App: React.FC = () => {
                                 <FileUploader 
                                     onFilesSelect={handleFilesSelect}
                                     onDriveSelect={handleDriveSelect}
-                                    isDriveLoading={isDriveLoading}
+                                    driveLoadingState={driveLoadingState}
                                 />
                              </div>
                          </div>

@@ -4,10 +4,10 @@ import { Upload, FileAudio, FileVideo, X, FolderInput, Files, HardDrive, Loader2
 interface FileUploaderProps {
   onFilesSelect: (files: File[]) => void;
   onDriveSelect: () => void;
-  isDriveLoading: boolean;
+  driveLoadingState: string | null;
 }
 
-const FileUploader: React.FC<FileUploaderProps> = ({ onFilesSelect, onDriveSelect, isDriveLoading }) => {
+const FileUploader: React.FC<FileUploaderProps> = ({ onFilesSelect, onDriveSelect, driveLoadingState }) => {
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -107,11 +107,11 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onFilesSelect, onDriveSelec
             </button>
              <button 
                 onClick={onDriveSelect}
-                disabled={isDriveLoading}
-                className={`flex items-center gap-2 px-6 py-3 bg-indigo-600/20 text-indigo-300 rounded-xl font-medium hover:bg-indigo-600/30 transition-colors border border-indigo-600/30 ${isDriveLoading ? 'opacity-70 cursor-wait' : ''}`}
+                disabled={!!driveLoadingState}
+                className={`flex items-center gap-2 px-6 py-3 bg-indigo-600/20 text-indigo-300 rounded-xl font-medium hover:bg-indigo-600/30 transition-colors border border-indigo-600/30 ${driveLoadingState ? 'opacity-70 cursor-wait' : ''}`}
             >
-                {isDriveLoading ? <Loader2 size={18} className="animate-spin"/> : <HardDrive size={18} />}
-                {isDriveLoading ? 'Importing...' : 'Google Drive'}
+                {driveLoadingState ? <Loader2 size={18} className="animate-spin"/> : <HardDrive size={18} />}
+                {driveLoadingState ? driveLoadingState : 'Google Drive'}
             </button>
         </div>
 

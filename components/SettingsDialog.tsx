@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Shield, Key, Cpu, Eye, EyeOff, Cloud, HardDrive, AlertTriangle, ExternalLink, Settings2, Copy, Check } from 'lucide-react';
+import { X, Save, Shield, Key, Cpu, Eye, EyeOff, Cloud, HardDrive, AlertTriangle, ExternalLink, Settings2, Copy, Check, Users } from 'lucide-react';
 import { TranscriptionProvider, TranscriptionSettings } from '../types';
 
 interface SettingsDialogProps {
@@ -135,8 +135,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
                         <div className="flex-1">
                             <h4 className="text-sm font-bold text-blue-200 mb-1">Configuration Helper</h4>
                             <p className="text-xs text-blue-300/80 mb-3">
-                                If you see "Access Blocked" or "Error 400", you must add this exact URL to your 
-                                <strong> Authorized JavaScript origins</strong> in Google Cloud.
+                                Paste this exact URL into your <strong>Authorized JavaScript origins</strong> in Google Cloud.
                             </p>
                             
                             <div className="flex items-center gap-2 bg-black/40 p-1.5 pr-2 rounded-lg border border-blue-500/20">
@@ -203,23 +202,26 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
 
                  {/* Setup Checklist (Collapsible or Small) */}
                   <div className="mt-4 border-t border-zinc-700/50 pt-4">
-                      <p className="text-xs font-bold text-zinc-400 mb-2">Setup Checklist</p>
-                      <ul className="space-y-2">
+                      <p className="text-xs font-bold text-zinc-400 mb-2">Google Cloud Setup Checklist</p>
+                      <ul className="space-y-3">
                           {[
-                              "Create Project in Google Cloud Console.",
-                              "Enable 'Google Drive API' & 'Google Picker API'.",
+                              "Create Project & Enable 'Google Drive API' + 'Picker API'.",
+                              "Create 'OAuth Client ID' (Web App) -> Add URL above to 'Authorized Origins'.",
                               "Create 'API Key' -> Paste above.",
-                              "Create 'OAuth Client ID' (Select Web App).",
-                              `Paste '${currentOrigin}' into 'Authorized Origins'.`
+                              "IMPORTANT: Go to 'OAuth Consent Screen' -> 'Test Users'.",
+                              "Click '+ Add Users' and enter YOUR email address.",
+                              "Save and retry."
                           ].map((step, i) => (
-                              <li key={i} className="flex items-start gap-2 text-[10px] text-zinc-500">
-                                  <span className="text-zinc-600 font-mono">{i + 1}.</span>
-                                  <span className="break-words">{step}</span>
+                              <li key={i} className={`flex items-start gap-3 text-[11px] ${i >= 3 ? 'text-amber-400 font-medium' : 'text-zinc-500'}`}>
+                                  <div className={`mt-0.5 min-w-[16px] h-4 rounded-full border flex items-center justify-center text-[9px] font-mono ${i >= 3 ? 'border-amber-500/50 bg-amber-500/10 text-amber-500' : 'border-zinc-700 bg-zinc-800 text-zinc-600'}`}>
+                                      {i + 1}
+                                  </div>
+                                  <span className="break-words leading-tight">{step}</span>
                               </li>
                           ))}
                       </ul>
-                      <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 mt-3 text-xs text-indigo-400 hover:text-indigo-300">
-                          <ExternalLink size={12} /> Open Console
+                      <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 mt-4 text-xs text-indigo-400 hover:text-indigo-300">
+                          <ExternalLink size={12} /> Open Google Cloud Console
                       </a>
                   </div>
              </div>
