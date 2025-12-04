@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { Upload, FileAudio, X } from 'lucide-react';
+import { Upload, FileAudio, FileVideo, X } from 'lucide-react';
 
 interface FileUploaderProps {
   onFileSelect: (file: File) => void;
@@ -19,17 +19,24 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onFileSelect }) => {
     }
   }, []);
 
+  const validateFile = (file: File) => {
+    if (file.type.startsWith('audio/') || file.type.startsWith('video/')) {
+        return true;
+    }
+    return false;
+  }
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
-      if (file.type.startsWith('audio/')) {
+      if (validateFile(file)) {
         setSelectedFile(file);
         onFileSelect(file);
       } else {
-        alert("Please upload an audio file.");
+        alert("Please upload an audio or video file.");
       }
     }
   }, [onFileSelect]);
@@ -38,14 +45,20 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onFileSelect }) => {
     e.preventDefault();
     if (e.target.files && e.target.files[0]) {
         const file = e.target.files[0];
-        setSelectedFile(file);
-        onFileSelect(file);
+        if (validateFile(file)) {
+            setSelectedFile(file);
+            onFileSelect(file);
+        } else {
+            alert("Please upload an audio or video file.");
+        }
     }
   }, [onFileSelect]);
 
   const clearFile = () => {
     setSelectedFile(null);
   };
+
+  const isVideo = selectedFile?.type.startsWith('video/');
 
   return (
     <div className="w-full max-w-2xl mx-auto">
@@ -63,7 +76,7 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onFileSelect }) => {
         <input
           type="file"
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-          accept="audio/*"
+          accept="audio/*,video/*"
           onChange={handleChange}
           disabled={!!selectedFile}
         />
@@ -78,7 +91,8 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onFileSelect }) => {
                 Click to upload or drag and drop
               </p>
               <p className="text-sm text-zinc-500 mt-1">
-                MP3, WAV, AAC, M4A (Max 20MB recommended)
+                Audio (MP3, WAV) or Video (MP4, MOV) files supported.
+                <br/> Max 20MB recommended.
               </p>
             </div>
           </div>
@@ -87,14 +101,14 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onFileSelect }) => {
             <div className="relative z-20 flex flex-col items-center w-full max-w-md animate-in fade-in zoom-in duration-300">
                 <div className="w-full p-4 bg-zinc-800/80 rounded-xl border border-zinc-700 flex items-center gap-4 shadow-lg">
                     <div className="w-12 h-12 rounded-lg bg-indigo-900/50 flex items-center justify-center text-indigo-400">
-                        <FileAudio size={24} />
+                        {isVideo ? <FileVideo size={24} /> : <FileAudio size={24} />}
                     </div>
                     <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-white truncate">
                             {selectedFile.name}
                         </p>
                         <p className="text-xs text-zinc-400">
-                            {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB
+                            {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB • {isVideo ? 'Video' : 'Audio'}
                         </p>
                     </div>
                     <button 

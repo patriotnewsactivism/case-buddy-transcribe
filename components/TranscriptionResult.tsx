@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Copy, Check, FileText, Wand2, Languages, Users, Download, Printer, ChevronDown } from 'lucide-react';
+import { Copy, Check, FileText, Wand2, Languages, Users, Download, Printer, ChevronDown, Music } from 'lucide-react';
 import { summarizeText, translateText } from '../services/geminiService';
 import { downloadFile, generateFilename, printLegalDocument } from '../utils/fileUtils';
 
 interface TranscriptionResultProps {
   text: string;
+  audioFile?: File | Blob | null;
 }
 
-const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initialText }) => {
+const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initialText, audioFile }) => {
   const [displayText, setDisplayText] = useState(initialText);
   const [copied, setCopied] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
@@ -124,6 +125,14 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initial
       setShowExportMenu(false);
   };
 
+  const handleDownloadAudio = () => {
+    if (!audioFile) return;
+    // Determine extension/type
+    const ext = audioFile.type.includes('video') ? 'mp4' : 'webm';
+    downloadFile(audioFile, generateFilename('Evidence_Original', ext), audioFile.type);
+    setShowExportMenu(false);
+  };
+
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6 animate-in slide-in-from-bottom-4 duration-500 pb-20">
       
@@ -188,16 +197,21 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initial
             </button>
             
             {showExportMenu && (
-                <div className="absolute right-0 mt-2 w-48 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl overflow-hidden z-20 animate-in fade-in zoom-in-95 duration-100">
+                <div className="absolute right-0 mt-2 w-52 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl overflow-hidden z-20 animate-in fade-in zoom-in-95 duration-100">
                     <button onClick={handlePrintLegal} className="w-full text-left px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 hover:text-white flex items-center gap-2">
                         <Printer size={16} /> Legal PDF / Print
                     </button>
                     <button onClick={handleExportText} className="w-full text-left px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 hover:text-white flex items-center gap-2">
                         <FileText size={16} /> Text File (.txt)
                     </button>
-                    <button onClick={handleExportJSON} className="w-full text-left px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 hover:text-white flex items-center gap-2 border-t border-zinc-800">
+                    <button onClick={handleExportJSON} className="w-full text-left px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 hover:text-white flex items-center gap-2">
                         <div className="font-mono text-xs opacity-70">{'{ }'}</div> JSON Metadata
                     </button>
+                    {audioFile && (
+                        <button onClick={handleDownloadAudio} className="w-full text-left px-4 py-3 text-sm text-emerald-400 hover:bg-zinc-800 hover:text-emerald-300 flex items-center gap-2 border-t border-zinc-800">
+                           <Music size={16} /> Save Original Audio
+                        </button>
+                    )}
                 </div>
             )}
           </div>

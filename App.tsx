@@ -28,14 +28,31 @@ const App: React.FC = () => {
   const [settings, setSettings] = useState<TranscriptionSettings>(DEFAULT_SETTINGS);
   const [errorMsg, setErrorMsg] = useState<string>('');
 
-  // Load settings from local storage on mount
+  // Load settings and Restore Session on mount
   useEffect(() => {
-    const saved = localStorage.getItem('whisper_settings');
-    if (saved) {
+    // 1. Settings
+    const savedSettings = localStorage.getItem('whisper_settings');
+    if (savedSettings) {
       try {
-        setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(saved) });
+        setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) });
       } catch (e) {
         console.error("Failed to parse settings", e);
+      }
+    }
+
+    // 2. Session Recovery
+    const savedSession = localStorage.getItem('whisper_current_session');
+    if (savedSession) {
+      try {
+        const data = JSON.parse(savedSession);
+        if (data.text && data.text.length > 0) {
+          setTranscription(data.text);
+          setStatus(TranscriptionStatus.COMPLETED);
+          // Note: We cannot restore the 'activeFile' Blob from localstorage due to security/size.
+          // The UI handles this by showing the result without the file action button.
+        }
+      } catch (e) {
+        console.error("Failed to restore session", e);
       }
     }
   }, []);
@@ -44,6 +61,16 @@ const App: React.FC = () => {
     setSettings(newSettings);
     localStorage.setItem('whisper_settings', JSON.stringify(newSettings));
   };
+
+  // Persist Session when it changes
+  useEffect(() => {
+    if (status === TranscriptionStatus.COMPLETED && transcription) {
+      localStorage.setItem('whisper_current_session', JSON.stringify({
+        text: transcription,
+        date: new Date().toISOString()
+      }));
+    }
+  }, [status, transcription]);
 
   const handleFileSelect = (file: File) => {
     setActiveFile(file);
@@ -83,18 +110,26 @@ const App: React.FC = () => {
       setTranscription('');
       setStatus(TranscriptionStatus.IDLE);
       setErrorMsg('');
+      localStorage.removeItem('whisper_current_session');
   }
 
-  // If mode changes, reset state
+  // If mode changes, reset state but keep session if completed? 
+  // Standard behavior: Changing mode resets input, but if we have a result, we might want to keep it.
+  // For simplicity, we reset to clear the workspace.
   useEffect(() => {
-    reset();
+    if (status !== TranscriptionStatus.COMPLETED) {
+        reset();
+    }
   }, [mode]);
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 selection:bg-indigo-500/30">
       <Header 
         currentMode={mode} 
-        setMode={setMode} 
+        setMode={(m) => {
+            if (status === TranscriptionStatus.COMPLETED) reset();
+            setMode(m);
+        }} 
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
@@ -206,7 +241,7 @@ const App: React.FC = () => {
                         Start Over
                      </button>
                 </div>
-                <TranscriptionResult text={transcription} />
+                <TranscriptionResult text={transcription} audioFile={activeFile} />
              </div>
         )}
 
