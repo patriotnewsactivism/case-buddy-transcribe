@@ -220,6 +220,19 @@ export const openDrivePicker = (
                             throw new Error("Google Picker library not loaded.");
                         }
 
+                        // Validate Picker components exist
+                        if (!google.picker.PickerBuilder) {
+                            throw new Error("Google Picker PickerBuilder not available. Library may not be fully loaded.");
+                        }
+
+                        if (!google.picker.DocsView) {
+                            throw new Error("Google Picker DocsView not available. Library may not be fully loaded.");
+                        }
+
+                        if (!google.picker.ViewId) {
+                            throw new Error("Google Picker ViewId not available. Library may not be fully loaded.");
+                        }
+
                         // Validate all required values before building picker
                         if (!apiKey || typeof apiKey !== 'string') {
                             throw new Error("Invalid API Key. Please check Settings.");
@@ -229,13 +242,27 @@ export const openDrivePicker = (
                         const pickerBuilder = new google.picker.PickerBuilder()
                             .setDeveloperKey(apiKey)
                             .setOAuthToken(accessToken)
-                            .setOrigin(origin)
-                            .addView(new google.picker.DocsView().setIncludeFolders(true).setSelectFolderEnabled(true))
-                            .addView(google.picker.ViewId.DOCS_AUDIO)
-                            .addView(google.picker.ViewId.DOCS_VIDEO);
+                            .setOrigin(origin);
+
+                        // Add folder view
+                        pickerBuilder.addView(
+                            new google.picker.DocsView()
+                                .setIncludeFolders(true)
+                                .setSelectFolderEnabled(true)
+                        );
+
+                        // Add audio view if available
+                        if (google.picker.ViewId.DOCS_AUDIO) {
+                            pickerBuilder.addView(google.picker.ViewId.DOCS_AUDIO);
+                        }
+
+                        // Add video view if available
+                        if (google.picker.ViewId.DOCS_VIDEO) {
+                            pickerBuilder.addView(google.picker.ViewId.DOCS_VIDEO);
+                        }
                         
-                        // Only set AppId if we successfully extracted it
-                        if (appId) {
+                        // Only set AppId if we successfully extracted it and it's valid
+                        if (appId && typeof appId === 'string' && appId.length > 0) {
                             pickerBuilder.setAppId(appId);
                         }
 
@@ -243,7 +270,7 @@ export const openDrivePicker = (
                             if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
                                 const docs = data[google.picker.Response.DOCUMENTS];
                                 const results: File[] = [];
-                                
+
                                 try {
                                     let count = 0;
                                     for (const doc of docs) {
@@ -264,21 +291,29 @@ export const openDrivePicker = (
                                     console.error("Download Error", downloadErr);
                                     reject(new Error("Download failed: " + downloadErr.message));
                                 }
-                                
+
                             } else if (data[google.picker.Response.ACTION] === google.picker.Action.CANCEL) {
                                 resolve([]);
                             }
                         });
 
+                        // Build and show the picker
                         const picker = pickerBuilder.build();
                         picker.setVisible(true);
 
                     } catch (buildError: any) {
                         console.error("Picker Build Error:", buildError);
-                        let msg = buildError.message || "Failed to build Picker.";
-                        if (msg.includes("Feature not enabled")) {
-                             msg += " (Ensure 'Google Picker API' is enabled in Cloud Console)";
+                        let msg = buildError.message || "Failed to build Google Picker.";
+
+                        // Provide helpful hints for common errors
+                        if (msg.includes("toString")) {
+                            msg += "\n\nThis usually means the Google Picker library is not fully loaded or a configuration value is invalid. Try refreshing the page.";
+                        } else if (msg.includes("Feature not enabled")) {
+                            msg += "\n\nEnsure the Google Picker API is enabled in your Google Cloud Console project.";
+                        } else if (msg.includes("API key")) {
+                            msg += "\n\nVerify your API Key in Settings is correct and has Picker API enabled.";
                         }
+
                         reject(new Error(msg));
                     }
                 };
