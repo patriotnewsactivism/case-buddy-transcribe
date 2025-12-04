@@ -17,6 +17,7 @@ const DEFAULT_SETTINGS: TranscriptionSettings = {
   openaiKey: '',
   assemblyAiKey: '',
   googleClientId: '',
+  googleApiKey: '', // Default empty
   legalMode: false,
   autoDownloadAudio: false,
 };
@@ -73,21 +74,33 @@ const App: React.FC = () => {
   };
 
   const handleDriveSelect = async () => {
-      if (!settings.googleClientId) {
-          alert("Please configure your Google Client ID in settings to use Drive Integration.");
+      if (!settings.googleClientId || !settings.googleApiKey) {
+          alert("To use Google Drive, you must provide both a Client ID and an API Key in Settings.");
           setIsSettingsOpen(true);
           return;
       }
 
       setIsDriveLoading(true);
       try {
-          const files = await openDrivePicker(settings.googleClientId, process.env.API_KEY || '');
+          const files = await openDrivePicker(settings.googleClientId, settings.googleApiKey);
           if (files.length > 0) {
               handleFilesSelect(files);
           }
-      } catch (e) {
+      } catch (e: any) {
           console.error("Drive Selection Error", e);
-          alert("Failed to access Google Drive. Please check your Client ID and network connection.");
+          
+          let errorMessage = "Failed to access Google Drive.";
+          
+          // Try to extract useful Google API error message
+          if (e.result && e.result.error && e.result.error.message) {
+              errorMessage += `\n\nGoogle Error: ${e.result.error.message}`;
+          } else if (e.message) {
+              errorMessage += `\n\nDetails: ${e.message}`;
+          } else {
+              errorMessage += `\n\nUnknown Error: ${JSON.stringify(e)}`;
+          }
+
+          alert(errorMessage);
       } finally {
           setIsDriveLoading(false);
       }

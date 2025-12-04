@@ -21,6 +21,7 @@ export interface TranscriptionSettings {
   openaiKey: string;
   assemblyAiKey: string;
   googleClientId: string; // New: For Google Drive Integration
+  googleApiKey: string;   // New: Required for Picker API (Project-specific)
   legalMode: boolean; // Enables verbatim, timestamps, and speaker ID
   autoDownloadAudio: boolean; // New: Auto-save audio on stop
 }

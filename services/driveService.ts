@@ -47,6 +47,7 @@ export const loadGoogleScripts = () => {
  */
 export const initGoogleClient = async (clientId: string, apiKey: string) => {
     if (!clientId) throw new Error("Google Client ID is required.");
+    if (!apiKey) throw new Error("Google API Key is required.");
     
     await new Promise<void>((resolve, reject) => {
         gapi.client.init({
@@ -55,6 +56,7 @@ export const initGoogleClient = async (clientId: string, apiKey: string) => {
         }).then(() => {
             resolve();
         }, (error) => {
+            console.error("GAPI Init Error:", error);
             reject(error);
         });
     });
@@ -71,21 +73,16 @@ export const initGoogleClient = async (clientId: string, apiKey: string) => {
  */
 const downloadDriveFile = async (fileId: string, fileName: string, mimeType: string): Promise<File> => {
     try {
-        const response = await gapi.client.drive.files.get({
-            fileId: fileId,
-            alt: 'media',
-        });
-        
-        // GAPI returns body in .body, we need to convert to Blob
-        // Note: gapi.client.drive.files.get with alt=media returns the raw body string in some versions,
-        // but robust handling requires fetch if gapi behaves oddly with binary.
-        // Let's use the access token to fetch directly for binary safety.
-        
-        const token = gapi.client.getToken().access_token;
+        // We use fetch with the access token directly to avoid GAPI binary handling issues
+        const token = gapi.client.getToken()?.access_token;
+        if (!token) throw new Error("No active Google Access Token");
+
         const fetchRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
             headers: { Authorization: `Bearer ${token}` }
         });
         
+        if (!fetchRes.ok) throw new Error(`Download failed: ${fetchRes.statusText}`);
+
         const blob = await fetchRes.blob();
         return new File([blob], fileName, { type: mimeType });
     } catch (e) {
@@ -106,6 +103,11 @@ const listFilesRecursive = async (folderId: string): Promise<File[]> => {
     let pageToken = null;
     
     do {
+        // Ensure GAPI client is loaded
+        if (!gapi.client.drive) {
+             await gapi.client.load('drive', 'v3');
+        }
+
         const response = await gapi.client.drive.files.list({
             q: query,
             fields: 'nextPageToken, files(id, name, mimeType)',
@@ -122,8 +124,6 @@ const listFilesRecursive = async (folderId: string): Promise<File[]> => {
                 filesFound.push(...children);
             } else {
                 // It's a media file, download it
-                // NOTE: In a real "VM" scenario we might pass the URL. 
-                // Here we download to memory to ensure the "Smart Engine" can process it.
                 const downloadedFile = await downloadDriveFile(file.id, file.name, file.mimeType);
                 filesFound.push(downloadedFile);
             }
@@ -168,19 +168,21 @@ export const openDrivePicker = (clientId: string, apiKey: string): Promise<File[
                                 const docs = data[google.picker.Response.DOCUMENTS];
                                 const results: File[] = [];
                                 
-                                // Show some UI loading state potentially? 
-                                // For now we await the downloads.
-                                
-                                for (const doc of docs) {
-                                    if (doc.mimeType === 'application/vnd.google-apps.folder') {
-                                        const children = await listFilesRecursive(doc.id);
-                                        results.push(...children);
-                                    } else {
-                                        const file = await downloadDriveFile(doc.id, doc.name, doc.mimeType);
-                                        results.push(file);
+                                try {
+                                    for (const doc of docs) {
+                                        if (doc.mimeType === 'application/vnd.google-apps.folder') {
+                                            const children = await listFilesRecursive(doc.id);
+                                            results.push(...children);
+                                        } else {
+                                            const file = await downloadDriveFile(doc.id, doc.name, doc.mimeType);
+                                            results.push(file);
+                                        }
                                     }
+                                    resolve(results);
+                                } catch (downloadErr) {
+                                    reject(downloadErr);
                                 }
-                                resolve(results);
+                                
                             } else if (data[google.picker.Response.ACTION] === google.picker.Action.CANCEL) {
                                 resolve([]);
                             }
