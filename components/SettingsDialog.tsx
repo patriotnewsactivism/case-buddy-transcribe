@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, Save, Shield, Key, Cpu, Eye, EyeOff, Download, Cloud, HardDrive, CheckCircle2, AlertTriangle, ExternalLink, Settings2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Save, Shield, Key, Cpu, Eye, EyeOff, Cloud, HardDrive, AlertTriangle, ExternalLink, Settings2, Copy, Check } from 'lucide-react';
 import { TranscriptionProvider, TranscriptionSettings } from '../types';
 
 interface SettingsDialogProps {
@@ -15,10 +15,16 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
   const [showAssemblyKey, setShowAssemblyKey] = useState(false);
   const [showGoogleClientId, setShowGoogleClientId] = useState(false);
   const [showGoogleApiKey, setShowGoogleApiKey] = useState(false);
+  
+  const [currentOrigin, setCurrentOrigin] = useState('');
+  const [copiedOrigin, setCopiedOrigin] = useState(false);
 
   // Sync when opening
-  React.useEffect(() => {
+  useEffect(() => {
     setLocalSettings(settings);
+    if (typeof window !== 'undefined') {
+        setCurrentOrigin(window.location.origin);
+    }
   }, [settings, isOpen]);
 
   if (!isOpen) return null;
@@ -26,6 +32,12 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
   const handleSave = () => {
     onSave(localSettings);
     onClose();
+  };
+
+  const copyOrigin = () => {
+      navigator.clipboard.writeText(currentOrigin);
+      setCopiedOrigin(true);
+      setTimeout(() => setCopiedOrigin(false), 2000);
   };
 
   return (
@@ -113,9 +125,34 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
              </div>
              
              <div className="p-5 bg-zinc-800/30 rounded-xl border border-zinc-800 space-y-5">
-                 <div className="text-xs text-zinc-400 bg-amber-900/10 border border-amber-900/30 p-3 rounded-lg">
-                    <AlertTriangle size={14} className="inline mr-1 text-amber-500 mb-0.5" />
-                    <strong>Required:</strong> To access Google Drive, you must provide your own Google Cloud credentials.
+                 
+                 {/* HELPER BOX: Origin Detection */}
+                 <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
+                     <div className="flex items-start gap-3">
+                        <div className="mt-1 p-1 bg-blue-500/20 rounded-md">
+                            <Settings2 size={16} className="text-blue-400" />
+                        </div>
+                        <div className="flex-1">
+                            <h4 className="text-sm font-bold text-blue-200 mb-1">Configuration Helper</h4>
+                            <p className="text-xs text-blue-300/80 mb-3">
+                                If you see "Access Blocked" or "Error 400", you must add this exact URL to your 
+                                <strong> Authorized JavaScript origins</strong> in Google Cloud.
+                            </p>
+                            
+                            <div className="flex items-center gap-2 bg-black/40 p-1.5 pr-2 rounded-lg border border-blue-500/20">
+                                <code className="flex-1 font-mono text-xs text-blue-100 px-2 truncate">
+                                    {currentOrigin}
+                                </code>
+                                <button 
+                                    onClick={copyOrigin}
+                                    className="flex items-center gap-1.5 px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold uppercase tracking-wide rounded transition-colors"
+                                >
+                                    {copiedOrigin ? <Check size={12} /> : <Copy size={12} />}
+                                    {copiedOrigin ? 'Copied' : 'Copy'}
+                                </button>
+                            </div>
+                        </div>
+                     </div>
                  </div>
 
                  {/* OAuth Client ID */}
@@ -162,25 +199,22 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
                             {showGoogleApiKey ? <EyeOff size={14}/> : <Eye size={14}/>}
                         </button>
                     </div>
-                    <p className="text-[10px] text-zinc-500">
-                        Must be from the same project as the Client ID. Requires <strong>Google Picker API</strong> enabled.
-                    </p>
                 </div>
 
                  {/* Setup Checklist (Collapsible or Small) */}
                   <div className="mt-4 border-t border-zinc-700/50 pt-4">
-                      <p className="text-xs font-bold text-zinc-400 mb-2">Quick Setup Guide</p>
+                      <p className="text-xs font-bold text-zinc-400 mb-2">Setup Checklist</p>
                       <ul className="space-y-2">
                           {[
                               "Create Project in Google Cloud Console.",
                               "Enable 'Google Drive API' & 'Google Picker API'.",
                               "Create 'API Key' -> Paste above.",
-                              "Create 'OAuth Client ID' (Web App) -> Paste above.",
-                              "Add this site URL to 'Authorized Origins' in Client ID."
+                              "Create 'OAuth Client ID' (Select Web App).",
+                              `Paste '${currentOrigin}' into 'Authorized Origins'.`
                           ].map((step, i) => (
                               <li key={i} className="flex items-start gap-2 text-[10px] text-zinc-500">
                                   <span className="text-zinc-600 font-mono">{i + 1}.</span>
-                                  <span>{step}</span>
+                                  <span className="break-words">{step}</span>
                               </li>
                           ))}
                       </ul>
