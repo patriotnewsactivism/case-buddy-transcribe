@@ -49,8 +49,13 @@ const transcribeWithGemini = async (
   if (settings.legalMode) {
     prompt = `You are an expert Court Reporter. Transcribe the attached audio file for a legal case.
     
+    CRITICAL INSTRUCTION FOR SPEAKER IDENTIFICATION:
+    There are likely MULTIPLE SPEAKERS (e.g., Speaker 1, Speaker 2, Speaker 3, Speaker 4, etc.).
+    You MUST listen for subtle differences in voice, tone, pitch, and cadence to separate them.
+    Do NOT lazily group distinct voices into just "Speaker 1" and "Speaker 2" if there are more.
+
     STRICT FORMATTING RULES:
-    1. Identify different speakers using the format: [Speaker 1], [Speaker 2], etc.
+    1. Identify EVERY distinct speaker using the format: [Speaker 1], [Speaker 2], [Speaker 3], etc.
     2. Insert timestamps [MM:SS] at the start of every speaker change.
     3. Return ONLY the transcript text. No intro/outro.
 
