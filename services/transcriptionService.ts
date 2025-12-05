@@ -239,28 +239,76 @@ const transcribeWithOpenAI = async (
   };
 };
 
+interface AssemblyWordResponse {
+    start: number;
+    end: number;
+    text: string;
+    speaker?: string | number;
+    punctuated_word?: string;
+}
+
+interface AssemblyUtteranceResponse {
+    start: number;
+    end: number;
+    speaker?: string | number;
+    text: string;
+}
+
 interface AssemblyTranscriptResponse {
     id: string;
     status: string;
     text?: string;
     language_code?: string;
     error?: string;
-    utterances?: Array<{
-        start: number;
-        end: number;
-        speaker?: string | number;
-        text: string;
-    }>;
+    utterances?: AssemblyUtteranceResponse[];
+    words?: AssemblyWordResponse[];
 }
+
+const formatSpeakerLabel = (speaker: string | number | undefined, fallbackIndex: number) => {
+    if (speaker === undefined || speaker === null || `${speaker}`.trim().length === 0) {
+        return `Speaker ${fallbackIndex}`;
+    }
+    return `Speaker ${speaker}`;
+};
+
+const mapWordsToSegments = (words?: AssemblyWordResponse[]): TranscriptSegment[] | undefined => {
+    if (!words || words.length === 0) return undefined;
+
+    const segments: TranscriptSegment[] = [];
+    let current: TranscriptSegment | null = null;
+    let fallbackSpeakerIndex = 1;
+
+    words.forEach((word) => {
+        const speakerLabel =
+            word.speaker === undefined || word.speaker === null || `${word.speaker}`.trim().length === 0
+                ? current?.speaker || `Speaker ${fallbackSpeakerIndex++}`
+                : formatSpeakerLabel(word.speaker, fallbackSpeakerIndex);
+        const token = word.punctuated_word?.trim() || word.text.trim();
+        if (!token) return;
+
+        if (current && current.speaker === speakerLabel) {
+            current.text = `${current.text} ${token}`.trim();
+            current.end = word.end / 1000;
+        } else {
+            if (current) segments.push(current);
+            current = {
+                start: word.start / 1000,
+                end: word.end / 1000,
+                speaker: speakerLabel,
+                text: token,
+            };
+        }
+    });
+
+    if (current) segments.push(current);
+    return segments;
+};
 
 export const mapAssemblyResponseToResult = (
     transcript: AssemblyTranscriptResponse
 ): TranscriptionResult => {
-    const segments = transcript.utterances?.map((utterance, index) => {
-        const speakerLabel =
-            utterance.speaker !== undefined && utterance.speaker !== null
-                ? `Speaker ${utterance.speaker}`
-                : `Speaker ${index + 1}`;
+    const segmentsFromUtterances = transcript.utterances?.map((utterance, index) => {
+        const speakerLabel = formatSpeakerLabel(utterance.speaker, index + 1);
 
         return {
             start: utterance.start / 1000,
@@ -270,8 +318,18 @@ export const mapAssemblyResponseToResult = (
         } as TranscriptSegment;
     });
 
+    const segments =
+        (segmentsFromUtterances && segmentsFromUtterances.length > 0
+            ? segmentsFromUtterances
+            : undefined) || mapWordsToSegments(transcript.words);
+
+    const combinedTextFromSegments = segments?.map((s) => s.text).join(" ").trim();
+    const resolvedText = combinedTextFromSegments && combinedTextFromSegments.length > 0
+        ? combinedTextFromSegments
+        : transcript.text || "";
+
     return {
-        text: transcript.text || "",
+        text: resolvedText,
         segments: segments && segments.length > 0 ? segments : undefined,
         detectedLanguage: transcript.language_code,
         providerUsed: TranscriptionProvider.ASSEMBLYAI,

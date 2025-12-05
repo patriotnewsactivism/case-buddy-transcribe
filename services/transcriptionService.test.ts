@@ -10,7 +10,7 @@ const baseTranscript = {
 };
 
 describe('mapAssemblyResponseToResult', () => {
-  it('maps utterances into transcript segments with seconds', () => {
+  it('maps utterances into transcript segments with seconds and prefers segment text', () => {
     const response = {
       ...baseTranscript,
       utterances: [
@@ -25,7 +25,7 @@ describe('mapAssemblyResponseToResult', () => {
       { start: 1.2, end: 2.4, speaker: 'Speaker 1', text: 'First line' },
       { start: 2.5, end: 4, speaker: 'Speaker A', text: 'Second line' },
     ]);
-    expect(result.text).toBe('Hello world');
+    expect(result.text).toBe('First line Second line');
     expect(result.detectedLanguage).toBe('en');
     expect(result.providerUsed).toBe(TranscriptionProvider.ASSEMBLYAI);
   });
@@ -37,5 +37,40 @@ describe('mapAssemblyResponseToResult', () => {
     expect(result.segments).toBeUndefined();
     expect(result.text).toBe('Hello world');
     expect(result.providerUsed).toBe(TranscriptionProvider.ASSEMBLYAI);
+  });
+
+  it('falls back to words array when utterances are missing', () => {
+    const response = {
+      ...baseTranscript,
+      text: '',
+      words: [
+        { start: 0, end: 500, speaker: 1, text: 'Hi' },
+        { start: 600, end: 1200, speaker: 1, punctuated_word: 'there' },
+        { start: 1500, end: 2000, speaker: 2, text: 'team' },
+      ],
+    };
+
+    const result = mapAssemblyResponseToResult(response);
+
+    expect(result.segments).toEqual([
+      { start: 0, end: 0.5, speaker: 'Speaker 1', text: 'Hi there' },
+      { start: 1.5, end: 2, speaker: 'Speaker 2', text: 'team' },
+    ]);
+    expect(result.text).toBe('Hi there team');
+  });
+
+  it('ignores placeholder transcript text when segment content is available', () => {
+    const response = {
+      ...baseTranscript,
+      text: 'AssemblyAI Support pending update to JSON schema',
+      words: [
+        { start: 0, end: 500, speaker: 1, text: 'Actual' },
+        { start: 600, end: 1200, speaker: 1, text: 'transcript' },
+      ],
+    };
+
+    const result = mapAssemblyResponseToResult(response);
+
+    expect(result.text).toBe('Actual transcript');
   });
 });
