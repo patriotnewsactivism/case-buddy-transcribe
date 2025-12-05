@@ -1,127 +1,132 @@
 // @ts-nocheck
-// Added 'drive.file' scope to allow uploading files created by this app
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
 
 let tokenClient: any = null;
 let savedAccessToken: string | null = null;
+let scriptsLoadedPromise: Promise<void> | null = null;
 
 /**
- * Dynamically loads the Google API scripts (GAPI and GIS)
- * Ensures 'picker' library is strictly loaded into GAPI.
+ * Dynamically loads Google Scripts (GAPI & GIS) with a singleton promise
+ * to prevent race conditions or multiple injections.
  */
-export const loadGoogleScripts = () => {
-  return new Promise<void>((resolve, reject) => {
-    let pickerReady = false;
-    let gisReady = false;
+export const loadGoogleScripts = (): Promise<void> => {
+    if (scriptsLoadedPromise) return scriptsLoadedPromise;
 
-    const checkDone = () => {
-        if (pickerReady && gisReady) resolve();
-    };
+    scriptsLoadedPromise = new Promise((resolve, reject) => {
+        let pickerLoaded = false;
+        let gisLoaded = false;
 
-    // --- 1. Load GAPI & Picker ---
-    const onGapiLoaded = () => {
-        if (!window.gapi) {
-            reject(new Error("GAPI loaded but window.gapi is undefined"));
-            return;
-        }
-        window.gapi.load('picker', {
-            callback: () => {
-                pickerReady = true;
+        const checkDone = () => {
+            if (pickerLoaded && gisLoaded) resolve();
+        };
+
+        // 1. Load GAPI (for Picker)
+        const loadGapi = () => {
+            if (window.gapi) {
+                window.gapi.load('picker', {
+                    callback: () => {
+                        pickerLoaded = true;
+                        checkDone();
+                    },
+                    onerror: () => console.warn("Picker failed to load (might be blocked by adblocker)")
+                });
+            } else {
+                const script = document.createElement('script');
+                script.src = 'https://apis.google.com/js/api.js';
+                script.async = true;
+                script.defer = true;
+                script.onload = () => {
+                    if (window.gapi) {
+                        window.gapi.load('picker', {
+                            callback: () => {
+                                pickerLoaded = true;
+                                checkDone();
+                            }
+                        });
+                    }
+                };
+                script.onerror = () => reject(new Error("Failed to load Google API script"));
+                document.body.appendChild(script);
+            }
+        };
+
+        // 2. Load GIS (for OAuth)
+        const loadGis = () => {
+            if (window.google && window.google.accounts) {
+                gisLoaded = true;
                 checkDone();
-            },
-            onerror: () => reject(new Error("Failed to load Google Picker library"))
-        });
-    };
+            } else {
+                const script = document.createElement('script');
+                script.src = 'https://accounts.google.com/gsi/client';
+                script.async = true;
+                script.defer = true;
+                script.onload = () => {
+                    gisLoaded = true;
+                    checkDone();
+                };
+                script.onerror = () => reject(new Error("Failed to load Google Identity Services"));
+                document.body.appendChild(script);
+            }
+        };
 
-    if (window.gapi) {
-        onGapiLoaded();
-    } else {
-        const script = document.createElement('script');
-        script.src = 'https://apis.google.com/js/api.js';
-        script.async = true;
-        script.defer = true;
-        script.onload = onGapiLoaded;
-        script.onerror = () => reject(new Error("Failed to load Google API script (api.js)"));
-        document.body.appendChild(script);
-    }
-
-    // --- 2. Load GIS (Identity Services) ---
-    const onGisLoaded = () => {
-         if (window.google && window.google.accounts) {
-             gisReady = true;
-             checkDone();
-         } else {
-             reject(new Error("GIS loaded but window.google.accounts is undefined"));
-         }
-    };
-
-    if (window.google && window.google.accounts) {
-        gisReady = true;
-        checkDone();
-    } else {
-        const script = document.createElement('script');
-        script.src = 'https://accounts.google.com/gsi/client';
-        script.async = true;
-        script.defer = true;
-        script.onload = onGisLoaded;
-        script.onerror = () => reject(new Error("Failed to load Google Identity Services script"));
-        document.body.appendChild(script);
-    }
-  });
-};
-
-/**
- * Initializes the Token Client (OAuth)
- */
-const initTokenClient = (clientId: string) => {
-    // Always re-init if client ID changes or if it's null
-    if (!window.google || !window.google.accounts) {
-        throw new Error("Google Identity Services not loaded.");
-    }
-
-    tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope: SCOPES,
-        callback: '', // defined dynamically at request time
+        loadGapi();
+        loadGis();
     });
+
+    return scriptsLoadedPromise;
 };
 
 /**
- * Gets a valid access token, prompting user if necessary
+ * Initializes the Token Client (OAuth) logic
  */
-const getAccessToken = (clientId: string): Promise<string> => {
+const getAccessToken = async (clientId: string): Promise<string> => {
+    await loadGoogleScripts();
+
     return new Promise((resolve, reject) => {
-        // Return existing token if we have one (simple caching strategy)
-        // In a real app, you'd check expiration, but for this session-based app it's usually fine
+        // Return cached token if available (simple session cache)
         if (savedAccessToken) {
             resolve(savedAccessToken);
             return;
         }
 
+        if (!window.google || !window.google.accounts) {
+            reject(new Error("Google Identity Services not loaded."));
+            return;
+        }
+
+        // Initialize client if needed
         if (!tokenClient) {
             try {
-                initTokenClient(clientId);
+                tokenClient = google.accounts.oauth2.initTokenClient({
+                    client_id: clientId,
+                    scope: SCOPES,
+                    callback: '', // Will be set in requestAccessToken
+                });
             } catch (e) {
-                reject(e);
+                reject(new Error("Failed to init token client. Check Client ID."));
                 return;
             }
         }
 
+        // Request token
         tokenClient.callback = (resp: any) => {
             if (resp.error) {
-                reject(resp);
+                console.error("OAuth Error:", resp);
+                reject(new Error(`OAuth Error: ${resp.error}`));
             } else {
                 savedAccessToken = resp.access_token;
                 resolve(resp.access_token);
             }
         };
 
-        tokenClient.requestAccessToken({prompt: 'consent'});
+        // Trigger popup
+        tokenClient.requestAccessToken({ prompt: 'consent' });
     });
 };
 
 /**
- * Uploads a file to Google Drive
+ * Uploads a file to Google Drive using standard REST API (no gapi.client)
+ * This is much more robust against initialization errors.
  */
 export const uploadToDrive = async (
     clientId: string,
@@ -131,18 +136,18 @@ export const uploadToDrive = async (
     mimeType: string
 ): Promise<string> => {
     try {
-        await loadGoogleScripts();
         const accessToken = await getAccessToken(clientId);
 
-        // 1. Find or Create Folder
-        let folderId = '';
+        // 1. Check for existing folder
         const folderQuery = `mimeType='application/vnd.google-apps.folder' and name='${folderName}' and trashed=false`;
-        
         const folderRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(folderQuery)}`, {
             headers: { Authorization: `Bearer ${accessToken}` }
         });
+        
+        if (!folderRes.ok) throw new Error("Failed to search Drive folders.");
         const folderData = await folderRes.json();
         
+        let folderId = '';
         if (folderData.files && folderData.files.length > 0) {
             folderId = folderData.files[0].id;
         } else {
@@ -158,6 +163,7 @@ export const uploadToDrive = async (
                     mimeType: 'application/vnd.google-apps.folder'
                 })
             });
+            if (!createRes.ok) throw new Error("Failed to create folder.");
             const createData = await createRes.json();
             folderId = createData.id;
         }
@@ -181,47 +187,39 @@ export const uploadToDrive = async (
         });
 
         if (!uploadRes.ok) {
-             const errText = await uploadRes.text();
-             throw new Error(`Upload Failed: ${errText}`);
+            const err = await uploadRes.text();
+            throw new Error(`Upload failed: ${err}`);
         }
 
-        const uploadData = await uploadRes.json();
-        return uploadData.id;
+        const result = await uploadRes.json();
+        return result.id;
 
     } catch (e: any) {
         console.error("Drive Upload Error:", e);
-        throw new Error("Failed to upload to Drive: " + (e.message || "Unknown error"));
-    }
-};
-
-
-/**
- * Downloads a file from Drive using standard fetch
- */
-const downloadDriveFile = async (fileId: string, fileName: string, mimeType: string, accessToken: string): Promise<File> => {
-    try {
-        const fetchRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-            headers: { Authorization: `Bearer ${accessToken}` }
-        });
-        
-        if (!fetchRes.ok) throw new Error(`Download failed: ${fetchRes.statusText}`);
-
-        const blob = await fetchRes.blob();
-        return new File([blob], fileName, { type: mimeType });
-    } catch (e) {
-        console.error("Error downloading drive file", e);
         throw e;
     }
 };
 
 /**
- * Recursively lists audio/video files
+ * Downloads a file content via fetch
+ */
+const downloadDriveFile = async (fileId: string, fileName: string, mimeType: string, accessToken: string): Promise<File> => {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!res.ok) throw new Error("Failed to download file content");
+    const blob = await res.blob();
+    return new File([blob], fileName, { type: mimeType });
+};
+
+/**
+ * Helper to recursively list files in folders
  */
 const listFilesRecursive = async (folderId: string, accessToken: string, apiKey: string, onProgress?: (msg: string) => void): Promise<File[]> => {
     const filesFound: File[] = [];
     const query = `'${folderId}' in parents and (mimeType contains 'audio/' or mimeType contains 'video/' or mimeType = 'application/vnd.google-apps.folder') and trashed = false`;
     let pageToken = null;
-    
+
     do {
         const params = new URLSearchParams({
             q: query,
@@ -230,29 +228,25 @@ const listFilesRecursive = async (folderId: string, accessToken: string, apiKey:
         });
         if (pageToken) params.append('pageToken', pageToken);
 
-        const response = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
+        const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`, {
             headers: { Authorization: `Bearer ${accessToken}` }
         });
-
-        if (!response.ok) throw new Error("Failed to list folder contents. Check Drive API permission.");
         
-        const result = await response.json();
-        const files = result.files;
-        
-        if (!files) break;
+        if (!res.ok) break;
+        const data = await res.json();
+        const files = data.files || [];
 
         for (const file of files) {
             if (file.mimeType === 'application/vnd.google-apps.folder') {
-                if (onProgress) onProgress(`Scanning folder: ${file.name}...`);
+                if (onProgress) onProgress(`Scanning ${file.name}...`);
                 const children = await listFilesRecursive(file.id, accessToken, apiKey, onProgress);
                 filesFound.push(...children);
             } else {
-                if (onProgress) onProgress(`Downloading: ${file.name}...`);
-                const downloadedFile = await downloadDriveFile(file.id, file.name, file.mimeType, accessToken);
-                filesFound.push(downloadedFile);
+                if (onProgress) onProgress(`Downloading ${file.name}...`);
+                filesFound.push(await downloadDriveFile(file.id, file.name, file.mimeType, accessToken));
             }
         }
-        pageToken = result.nextPageToken;
+        pageToken = data.nextPageToken;
     } while (pageToken);
 
     return filesFound;
@@ -261,126 +255,75 @@ const listFilesRecursive = async (folderId: string, accessToken: string, apiKey:
 /**
  * Opens the Google Drive Picker
  */
-export const openDrivePicker = (
+export const openDrivePicker = async (
     clientIdRaw: string, 
     apiKeyRaw: string, 
     onProgress?: (msg: string) => void
 ): Promise<File[]> => {
+    const clientId = clientIdRaw?.trim();
+    const apiKey = apiKeyRaw?.trim();
+
+    if (!clientId || !apiKey) throw new Error("Missing Client ID or API Key");
+
+    if (onProgress) onProgress("Initializing...");
+    await loadGoogleScripts();
+
+    const accessToken = await getAccessToken(clientId);
+
     return new Promise((resolve, reject) => {
-        // 1. SANITIZE
-        const clientId = clientIdRaw?.trim();
-        const apiKey = apiKeyRaw?.trim();
-
-        if (!clientId || !apiKey) {
-             reject(new Error("Missing credentials. Please check Settings."));
-             return;
-        }
-
-        if (onProgress) onProgress("Initializing Google API...");
-        
-        // 2. LOAD
-        loadGoogleScripts().then(() => {
-            try {
-                // 3. INIT OAUTH
-                if (!tokenClient) initTokenClient(clientId);
-
-                if (onProgress) onProgress("Waiting for login...");
-
-                // 4. REQUEST TOKEN
-                tokenClient.callback = async (resp: any) => {
-                    if (resp.error) {
-                        console.error("OAuth Error:", resp);
-                        reject(new Error(`OAuth Error: ${resp.error}`));
-                        return;
-                    }
-
-                    const accessToken = resp.access_token;
-                    savedAccessToken = accessToken;
-                    
-                    try {
-                        if (onProgress) onProgress("Opening Picker...");
-                        
-                        // Extract App ID safely
-                        let appId = '';
-                        try {
-                           appId = clientId.split('-')[0];
-                        } catch(e) {
-                           console.warn("Could not extract App ID from Client ID.");
-                        }
-                        
-                        const origin = window.location.protocol + '//' + window.location.host;
-
-                        // Check Picker Lib
-                        if (!window.google || !window.google.picker) {
-                            throw new Error("Google Picker library not loaded.");
-                        }
-
-                        // 5. BUILD PICKER
-                        const pickerBuilder = new google.picker.PickerBuilder()
-                            .setDeveloperKey(apiKey)
-                            .setOAuthToken(accessToken)
-                            .setOrigin(origin)
-                            .addView(new google.picker.DocsView().setIncludeFolders(true).setSelectFolderEnabled(true))
-                            .addView(google.picker.ViewId.DOCS_AUDIO)
-                            .addView(google.picker.ViewId.DOCS_VIDEO);
-                        
-                        if (appId) {
-                            pickerBuilder.setAppId(appId);
-                        }
-
-                        pickerBuilder.setCallback(async (data: any) => {
-                            if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
-                                const docs = data[google.picker.Response.DOCUMENTS];
-                                const results: File[] = [];
-                                
-                                try {
-                                    let count = 0;
-                                    for (const doc of docs) {
-                                        count++;
-                                        const progressMsg = `Downloading ${count}/${docs.length}: ${doc.name}`;
-                                        if (onProgress) onProgress(progressMsg);
-
-                                        if (doc.mimeType === 'application/vnd.google-apps.folder') {
-                                            const children = await listFilesRecursive(doc.id, accessToken, apiKey, onProgress);
-                                            results.push(...children);
-                                        } else {
-                                            const file = await downloadDriveFile(doc.id, doc.name, doc.mimeType, accessToken);
-                                            results.push(file);
-                                        }
-                                    }
-                                    resolve(results);
-                                } catch (downloadErr: any) {
-                                    console.error("Download Error", downloadErr);
-                                    reject(new Error("Download failed: " + downloadErr.message));
-                                }
-                                
-                            } else if (data[google.picker.Response.ACTION] === google.picker.Action.CANCEL) {
-                                resolve([]);
-                            }
-                        });
-
-                        const picker = pickerBuilder.build();
-                        picker.setVisible(true);
-
-                    } catch (buildError: any) {
-                        console.error("Picker Build Error:", buildError);
-                        let msg = buildError.message || "Failed to build Picker.";
-                        if (msg.includes("Feature not enabled")) {
-                             msg += " (Ensure 'Google Picker API' is enabled in Cloud Console)";
-                        }
-                        reject(new Error(msg));
-                    }
-                };
-
-                // Trigger OAuth flow
-                tokenClient.requestAccessToken({prompt: 'consent'});
-
-            } catch (e: any) {
-                console.error("Initialization Error", e);
-                reject(new Error("Failed to initialize: " + e.message));
+        try {
+            if (!window.google || !window.google.picker) {
+                throw new Error("Picker API failed to load.");
             }
-        }).catch((err) => {
-             reject(new Error("Script Load Error: " + err.message));
-        });
+
+            const view = new google.picker.DocsView()
+                .setIncludeFolders(true)
+                .setSelectFolderEnabled(true);
+
+            const pickerBuilder = new google.picker.PickerBuilder()
+                .setDeveloperKey(apiKey)
+                .setOAuthToken(accessToken)
+                .addView(view)
+                .addView(google.picker.ViewId.DOCS_AUDIO)
+                .addView(google.picker.ViewId.DOCS_VIDEO)
+                .setCallback(async (data: any) => {
+                    if (data.action === google.picker.Action.PICKED) {
+                        const docs = data.docs;
+                        const results: File[] = [];
+                        try {
+                            for (let i = 0; i < docs.length; i++) {
+                                const doc = docs[i];
+                                if (onProgress) onProgress(`Processing ${i+1}/${docs.length}: ${doc.name}`);
+                                
+                                if (doc.mimeType === 'application/vnd.google-apps.folder') {
+                                    const children = await listFilesRecursive(doc.id, accessToken, apiKey, onProgress);
+                                    results.push(...children);
+                                } else {
+                                    results.push(await downloadDriveFile(doc.id, doc.name, doc.mimeType, accessToken));
+                                }
+                            }
+                            resolve(results);
+                        } catch (e: any) {
+                            reject(new Error("Download failed: " + e.message));
+                        }
+                    } else if (data.action === google.picker.Action.CANCEL) {
+                        resolve([]);
+                    }
+                });
+            
+            // Safe App ID extraction
+            try {
+                const appId = clientId.split('-')[0];
+                if (appId) pickerBuilder.setAppId(appId);
+            } catch (e) {
+                // Ignore app ID if parsing fails
+            }
+
+            const picker = pickerBuilder.build();
+            picker.setVisible(true);
+
+        } catch (e: any) {
+            reject(new Error("Failed to build picker: " + e.message));
+        }
     });
 };

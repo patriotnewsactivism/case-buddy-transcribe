@@ -10,21 +10,20 @@ import { transcribeAudio } from './services/transcriptionService';
 import { processMediaFile } from './utils/audioUtils';
 import { downloadFile, generateFilename } from './utils/fileUtils';
 import { openDrivePicker, uploadToDrive } from './services/driveService';
-import { ArrowLeft, Plus } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 
 const DEFAULT_SETTINGS: TranscriptionSettings = {
   provider: TranscriptionProvider.GEMINI,
   openaiKey: '',
   assemblyAiKey: '',
   googleClientId: '',
-  googleApiKey: '', // Default empty
+  googleApiKey: '', 
   legalMode: false,
   autoDownloadAudio: false,
   autoDriveUpload: false,
 };
 
 const App: React.FC = () => {
-  // CHANGED: Default mode is now UPLOAD
   const [mode, setMode] = useState<AppMode>(AppMode.UPLOAD);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<TranscriptionSettings>(DEFAULT_SETTINGS);
@@ -66,18 +65,17 @@ const App: React.FC = () => {
     }));
 
     setQueue(prev => [...prev, ...newItems]);
-    setMode(AppMode.UPLOAD); // Ensure we are in upload mode view
+    setMode(AppMode.UPLOAD); 
   };
 
   const handleRecordingComplete = (blob: Blob) => {
-    // Treat recording as a single file batch
     const file = new File([blob], `Recording_${new Date().toLocaleTimeString()}.webm`, { type: 'audio/webm' });
     handleFilesSelect([file]);
   };
 
   const handleDriveSelect = async () => {
       if (!settings.googleClientId || !settings.googleApiKey) {
-          alert("To use Google Drive, you must provide both a Client ID and an API Key in Settings.");
+          alert("Please configure Google Drive Client ID and API Key in Settings first.");
           setIsSettingsOpen(true);
           return;
       }
@@ -87,7 +85,7 @@ const App: React.FC = () => {
           const files = await openDrivePicker(
             settings.googleClientId, 
             settings.googleApiKey,
-            (progressMsg) => setDriveLoadingState(progressMsg)
+            (msg) => setDriveLoadingState(msg)
           );
           
           if (files.length > 0) {
@@ -96,12 +94,7 @@ const App: React.FC = () => {
           }
       } catch (e: any) {
           console.error("Drive Selection Error", e);
-          
-          let errorMessage = "Failed to access Google Drive.";
-          if (e.message) {
-              errorMessage += `\n\n${e.message}`;
-          }
-          alert(errorMessage);
+          alert(`Drive Error: ${e.message}`);
       } finally {
           setDriveLoadingState(null);
       }
@@ -111,85 +104,87 @@ const App: React.FC = () => {
     setQueue(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
   };
 
-  // --- BATCH PROCESSOR LOOP ---
-  
-  const processQueue = async () => {
-    if (isProcessingRef.current) return;
-
-    // Find next queued item
-    const nextItem = queue.find(i => i.status === 'QUEUED');
-    if (!nextItem) return;
-
-    isProcessingRef.current = true;
-    const itemId = nextItem.id;
-
-    try {
-        // 1. OPTIMIZE / CONVERT
-        // NOTE: If provider is GEMINI, we SKIP conversion to allow fast video upload.
-        const skipConversion = settings.provider === TranscriptionProvider.GEMINI;
-        updateItem(itemId, { status: 'PROCESSING', stage: skipConversion ? 'Uploading Media...' : 'Optimizing Audio...', progress: 5 });
-        
-        let fileToUpload: File | Blob = nextItem.file;
-        fileToUpload = await processMediaFile(nextItem.file, skipConversion);
-        
-        // 2. TRANSCRIBE
-        updateItem(itemId, { stage: 'Processing Evidence...', progress: 15 });
-        
-        const text = await transcribeAudio(
-            fileToUpload,
-            '',
-            settings,
-            (pct) => {
-                const mappedProgress = 15 + Math.round(pct * 0.75);
-                updateItem(itemId, { 
-                    stage: pct === 100 ? 'Analyzing & Transcribing...' : `Uploading (${pct}%)`, 
-                    progress: mappedProgress 
-                });
-            }
-        );
-
-        updateItem(itemId, { status: 'COMPLETED', progress: 100, transcript: text });
-
-        // 3. AUTO-SAVE TO DRIVE
-        if (settings.autoDriveUpload && settings.googleClientId) {
-             try {
-                // Upload Transcript
-                await uploadToDrive(
-                    settings.googleClientId,
-                    "GeminiWhisper", // Folder Name
-                    `Transcript_${nextItem.file.name}.txt`,
-                    text,
-                    "text/plain"
-                );
-                // Upload Audio
-                await uploadToDrive(
-                    settings.googleClientId,
-                    "GeminiWhisper",
-                    nextItem.file.name,
-                    nextItem.file,
-                    nextItem.file.type
-                );
-                console.log("Auto-save to drive successful");
-             } catch (driveErr) {
-                 console.error("Auto-save to drive failed", driveErr);
-                 // Don't fail the whole item, just log it
-             }
-        }
-
-    } catch (error: any) {
-        console.error(`Error processing file ${nextItem.file.name}:`, error);
-        updateItem(itemId, { status: 'ERROR', error: error.message || 'Processing Failed' });
-    } finally {
-        isProcessingRef.current = false;
-        // Recursively call to process next item
-        processQueue();
-    }
-  };
-
-  // Trigger processing whenever queue changes
+  // --- PROCESS LOOP (Watched via useEffect) ---
   useEffect(() => {
-    processQueue();
-  }, [queue, settings]); // Re-run if queue changes
+    const processNext = async () => {
+        if (isProcessingRef.current) return;
+
+        const nextItem = queue.find(i => i.status === 'QUEUED');
+        if (!nextItem) return;
+
+        isProcessingRef.current = true;
+        const itemId = nextItem.id;
+
+        try {
+            // 1. OPTIMIZE / CONVERT
+            // Gemini natively supports Video, so we SKIP the slow audio stripping process.
+            // Other providers (OpenAI/Assembly) usually require Audio, so we process.
+            const skipConversion = settings.provider === TranscriptionProvider.GEMINI;
+            
+            updateItem(itemId, { 
+                status: 'PROCESSING', 
+                stage: skipConversion ? 'Uploading Evidence...' : 'Optimizing Audio...', 
+                progress: 5 
+            });
+            
+            // This returns the original file if skipConversion is true (Instant!)
+            const fileToProcess = await processMediaFile(nextItem.file, skipConversion);
+            
+            // 2. TRANSCRIBE
+            updateItem(itemId, { stage: 'Processing Evidence...', progress: 15 });
+            
+            const text = await transcribeAudio(
+                fileToProcess,
+                '',
+                settings,
+                (pct) => {
+                    const mappedProgress = 15 + Math.round(pct * 0.75);
+                    updateItem(itemId, { 
+                        stage: pct === 100 ? 'Analyzing & Transcribing...' : `Uploading (${pct}%)`, 
+                        progress: mappedProgress 
+                    });
+                }
+            );
+
+            updateItem(itemId, { status: 'COMPLETED', progress: 100, transcript: text });
+
+            // 3. AUTO-SAVE TO DRIVE
+            if (settings.autoDriveUpload && settings.googleClientId) {
+                 try {
+                    // Upload Transcript
+                    await uploadToDrive(
+                        settings.googleClientId,
+                        "GeminiWhisper", 
+                        `Transcript_${nextItem.file.name}.txt`,
+                        text,
+                        "text/plain"
+                    );
+                    
+                    // Upload Original Evidence (Audio or Video)
+                    await uploadToDrive(
+                        settings.googleClientId,
+                        "GeminiWhisper",
+                        nextItem.file.name, // Use original name
+                        nextItem.file,      // Upload original file
+                        nextItem.file.type
+                    );
+                    console.log("Auto-save to drive successful");
+                 } catch (driveErr) {
+                     console.error("Auto-save failed", driveErr);
+                     // We don't fail the batch item if drive upload fails, just log it.
+                 }
+            }
+
+        } catch (error: any) {
+            console.error(`Error processing file ${nextItem.file.name}:`, error);
+            updateItem(itemId, { status: 'ERROR', error: error.message || 'Processing Failed' });
+        } finally {
+            isProcessingRef.current = false;
+        }
+    };
+
+    processNext();
+  }, [queue, settings]); // Re-runs when queue updates (e.g. status changes)
 
   // --- HANDLERS ---
 
@@ -208,11 +203,8 @@ const App: React.FC = () => {
       if (confirm("Clear all files and results?")) {
           setQueue([]);
           setViewingItemId(null);
-          // Keep mode as is
       }
   }
-
-  // --- RENDER HELPERS ---
 
   const viewingItem = viewingItemId ? queue.find(i => i.id === viewingItemId) : null;
 
@@ -236,7 +228,6 @@ const App: React.FC = () => {
 
       <main className="max-w-6xl mx-auto px-4 py-12 flex flex-col items-center">
         
-        {/* VIEW: RESULT DETAIL */}
         {viewingItem && viewingItem.transcript ? (
             <div className="w-full animate-in slide-in-from-right duration-300">
                 <button 
@@ -249,9 +240,7 @@ const App: React.FC = () => {
                 <TranscriptionResult text={viewingItem.transcript} audioFile={viewingItem.file} />
             </div>
         ) : (
-            // VIEW: MAIN CONTENT
             <>
-                {/* Intro (Only show if queue is empty) */}
                 {queue.length === 0 && (
                     <div className="text-center mb-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
                         <h2 className="text-4xl md:text-5xl font-bold tracking-tight text-white mb-4">
@@ -266,7 +255,6 @@ const App: React.FC = () => {
                     </div>
                 )}
 
-                {/* Mode Switcher Content */}
                 {queue.length === 0 && (
                     <div className="w-full">
                         {mode === AppMode.RECORD ? (
@@ -285,11 +273,9 @@ const App: React.FC = () => {
                     </div>
                 )}
 
-                {/* Queue View (If items exist) */}
                 {queue.length > 0 && (
                      <div className="w-full">
                         <div className="flex justify-between items-center mb-6">
-                             {/* Add More Button */}
                              {mode === AppMode.UPLOAD && (
                                 <div className="flex gap-2">
                                     <button 
@@ -308,9 +294,8 @@ const App: React.FC = () => {
                             onDownloadAll={handleDownloadAll}
                         />
 
-                        {/* Dropzone for adding more files (Mini) */}
                          <div className="mt-8 pt-8 border-t border-zinc-900">
-                             <p className="text-center text-zinc-600 text-sm mb-4">Need to add more files?</p>
+                             <p className="text-center text-zinc-600 text-sm mb-4">Add more files</p>
                              <div className="max-w-md mx-auto opacity-50 hover:opacity-100 transition-opacity">
                                 <FileUploader 
                                     onFilesSelect={handleFilesSelect}
