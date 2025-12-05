@@ -32,7 +32,7 @@ const App: React.FC = () => {
   // Batch State
   const [queue, setQueue] = useState<BatchItem[]>([]);
   const [viewingItemId, setViewingItemId] = useState<string | null>(null);
-  const isProcessingRef = useRef(false);
+  const [processingItemId, setProcessingItemId] = useState<string | null>(null);
 
   // Drive State
   const [driveLoadingState, setDriveLoadingState] = useState<string | null>(null);
@@ -109,82 +109,89 @@ const App: React.FC = () => {
 
   // --- PROCESS LOOP (Watched via useEffect) ---
   useEffect(() => {
+    let cancelled = false;
+
     const processNext = async () => {
-        if (isProcessingRef.current) return;
+      if (processingItemId) return;
 
-        const nextItem = queue.find(i => i.status === 'QUEUED');
-        if (!nextItem) return;
+      const nextItem = queue.find(i => i.status === 'QUEUED');
+      if (!nextItem) return;
 
-        isProcessingRef.current = true;
-        const itemId = nextItem.id;
+      const itemId = nextItem.id;
+      setProcessingItemId(itemId);
 
-        try {
-            // 1. OPTIMIZE / CONVERT
-            // Gemini natively supports Video, so we SKIP the slow audio stripping process.
-            const skipConversion = settings.provider === TranscriptionProvider.GEMINI;
-            
-            updateItem(itemId, { 
-                status: 'PROCESSING', 
-                stage: skipConversion ? 'Uploading Evidence...' : 'Optimizing Audio...', 
-                progress: 5 
+      try {
+        // 1. OPTIMIZE / CONVERT
+        // Gemini natively supports Video, so we SKIP the slow audio stripping process.
+        const skipConversion = settings.provider === TranscriptionProvider.GEMINI;
+
+        updateItem(itemId, {
+          status: 'PROCESSING',
+          stage: skipConversion ? 'Uploading Evidence...' : 'Optimizing Audio...',
+          progress: 5
+        });
+
+        const fileToProcess = await processMediaFile(nextItem.file, skipConversion);
+
+        // 2. TRANSCRIBE
+        updateItem(itemId, { stage: 'Processing Evidence...', progress: 15 });
+
+        // Result is now an object, not a string
+        const result = await transcribeAudio(
+          fileToProcess,
+          '',
+          settings,
+          (pct) => {
+            const mappedProgress = 15 + Math.round(pct * 0.75);
+            updateItem(itemId, {
+              stage: pct === 100 ? 'Analyzing & Transcribing...' : `Uploading (${pct}%)`,
+              progress: mappedProgress
             });
-            
-            const fileToProcess = await processMediaFile(nextItem.file, skipConversion);
-            
-            // 2. TRANSCRIBE
-            updateItem(itemId, { stage: 'Processing Evidence...', progress: 15 });
-            
-            // Result is now an object, not a string
-            const result = await transcribeAudio(
-                fileToProcess,
-                '',
-                settings,
-                (pct) => {
-                    const mappedProgress = 15 + Math.round(pct * 0.75);
-                    updateItem(itemId, { 
-                        stage: pct === 100 ? 'Analyzing & Transcribing...' : `Uploading (${pct}%)`, 
-                        progress: mappedProgress 
-                    });
-                }
+          }
+        );
+
+        updateItem(itemId, { status: 'COMPLETED', progress: 100, result: result });
+
+        // 3. AUTO-SAVE TO DRIVE
+        if (settings.autoDriveUpload && settings.googleClientId) {
+          try {
+            // Upload Transcript
+            await uploadToDrive(
+              settings.googleClientId,
+              "GeminiWhisper",
+              `Transcript_${nextItem.file.name}.txt`,
+              result.text,
+              "text/plain"
             );
 
-            updateItem(itemId, { status: 'COMPLETED', progress: 100, result: result });
-
-            // 3. AUTO-SAVE TO DRIVE
-            if (settings.autoDriveUpload && settings.googleClientId) {
-                 try {
-                    // Upload Transcript
-                    await uploadToDrive(
-                        settings.googleClientId,
-                        "GeminiWhisper", 
-                        `Transcript_${nextItem.file.name}.txt`,
-                        result.text,
-                        "text/plain"
-                    );
-                    
-                    // Upload Original Evidence
-                    await uploadToDrive(
-                        settings.googleClientId,
-                        "GeminiWhisper",
-                        nextItem.file.name, 
-                        nextItem.file,      
-                        nextItem.file.type
-                    );
-                 } catch (driveErr) {
-                     console.error("Auto-save failed", driveErr);
-                 }
-            }
-
-        } catch (error: any) {
-            console.error(`Error processing file ${nextItem.file.name}:`, error);
-            updateItem(itemId, { status: 'ERROR', error: error.message || 'Processing Failed' });
-        } finally {
-            isProcessingRef.current = false;
+            // Upload Original Evidence
+            await uploadToDrive(
+              settings.googleClientId,
+              "GeminiWhisper",
+              nextItem.file.name,
+              nextItem.file,
+              nextItem.file.type
+            );
+          } catch (driveErr) {
+            console.error("Auto-save failed", driveErr);
+          }
         }
+      } catch (error: any) {
+        console.error(`Error processing file ${nextItem.file.name}:`, error);
+        updateItem(itemId, { status: 'ERROR', error: error.message || 'Processing Failed' });
+      } finally {
+        if (!cancelled) {
+          setProcessingItemId(null);
+        }
+      }
     };
 
     processNext();
-  }, [queue, settings]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [queue, settings, processingItemId]);
 
   // --- HANDLERS ---
 
