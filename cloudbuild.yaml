@@ -34,3 +34,6 @@ substitutions:
 
 images:
   - 'gcr.io/$PROJECT_ID/gemini-whisper'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
