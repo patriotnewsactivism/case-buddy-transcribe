@@ -38,4 +38,24 @@ describe('mapAssemblyResponseToResult', () => {
     expect(result.text).toBe('Hello world');
     expect(result.providerUsed).toBe(TranscriptionProvider.ASSEMBLYAI);
   });
+
+  it('falls back to words array when utterances are missing', () => {
+    const response = {
+      ...baseTranscript,
+      text: '',
+      words: [
+        { start: 0, end: 500, speaker: 1, text: 'Hi' },
+        { start: 600, end: 1200, speaker: 1, punctuated_word: 'there' },
+        { start: 1500, end: 2000, speaker: 2, text: 'team' },
+      ],
+    };
+
+    const result = mapAssemblyResponseToResult(response);
+
+    expect(result.segments).toEqual([
+      { start: 0, end: 0.5, speaker: 'Speaker 1', text: 'Hi there' },
+      { start: 1.5, end: 2, speaker: 'Speaker 2', text: 'team' },
+    ]);
+    expect(result.text).toBe('Hi there team');
+  });
 });
