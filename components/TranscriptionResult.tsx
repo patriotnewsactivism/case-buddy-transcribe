@@ -21,6 +21,7 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [speakerAliases, setSpeakerAliases] = useState<Record<string, string>>({});
   
   // Audio Player State
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -50,6 +51,20 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
     setSummary(null);
     setTranslation(null);
   }, [result]);
+
+  useEffect(() => {
+    try {
+      const savedAliases = localStorage.getItem('speaker_aliases');
+      if (savedAliases) {
+        const parsed = JSON.parse(savedAliases);
+        if (parsed && typeof parsed === 'object') {
+          setSpeakerAliases(parsed);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load speaker aliases', e);
+    }
+  }, []);
 
   // Close menu on outside click
   useEffect(() => {
@@ -94,6 +109,25 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
           audioRef.current.play();
           setIsPlaying(true);
       }
+  };
+
+  const getDisplaySpeaker = (rawSpeaker: string) => {
+      const key = (rawSpeaker || 'Speaker').trim();
+      return speakerAliases[key] || key || 'Speaker';
+  };
+
+  const rememberSpeaker = (rawSpeaker: string) => {
+      const key = (rawSpeaker || 'Speaker').trim();
+      const suggestion = speakerAliases[key] || key;
+      const alias = prompt('Remember this speaker as:', suggestion);
+      if (!alias) return;
+
+      const cleaned = alias.trim();
+      if (!cleaned) return;
+
+      const updated = { ...speakerAliases, [key]: cleaned };
+      setSpeakerAliases(updated);
+      localStorage.setItem('speaker_aliases', JSON.stringify(updated));
   };
 
   // --- EDITING & LEARNING LOGIC ---
@@ -283,11 +317,18 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
                                   >
                                       <div className="flex items-baseline gap-3 mb-1">
                                           <span className={`text-[10px] font-bold uppercase tracking-wider ${idx === activeSegmentIndex ? 'text-indigo-400' : 'text-zinc-500'}`}>
-                                              {seg.speaker || `Speaker`}
+                                              {getDisplaySpeaker(seg.speaker)}
                                           </span>
                                           <span className="text-[10px] font-mono text-zinc-600">
                                               {new Date(seg.start * 1000).toISOString().substr(14, 5)}
                                           </span>
+                                          <button
+                                            className="text-[10px] text-zinc-500 hover:text-amber-300 transition-colors ml-auto flex items-center gap-1"
+                                            onClick={(e) => { e.stopPropagation(); rememberSpeaker(seg.speaker); }}
+                                          >
+                                            <Users size={12} />
+                                            Remember
+                                          </button>
                                       </div>
                                       <p className={`text-base leading-relaxed ${idx === activeSegmentIndex ? 'text-white' : 'text-zinc-300 group-hover:text-zinc-200'}`}>
                                           {seg.text}
