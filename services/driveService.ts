@@ -1,7 +1,9 @@
 // @ts-nocheck
-const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
+// Added 'drive.file' scope to allow uploading files created by this app
+const SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
 
 let tokenClient: any = null;
+let savedAccessToken: string | null = null;
 
 /**
  * Dynamically loads the Google API scripts (GAPI and GIS)
@@ -22,13 +24,12 @@ export const loadGoogleScripts = () => {
             reject(new Error("GAPI loaded but window.gapi is undefined"));
             return;
         }
-        // Force load picker library every time
         window.gapi.load('picker', {
             callback: () => {
                 pickerReady = true;
                 checkDone();
             },
-            onerror: () => reject(new Error("Failed to load Google Picker library (Network or CORS issue)"))
+            onerror: () => reject(new Error("Failed to load Google Picker library"))
         });
     };
 
@@ -70,11 +71,10 @@ export const loadGoogleScripts = () => {
 };
 
 /**
- * Initializes the Token Client (OAuth) ONLY. 
+ * Initializes the Token Client (OAuth)
  */
 const initTokenClient = (clientId: string) => {
-    if (tokenClient) return; 
-
+    // Always re-init if client ID changes or if it's null
     if (!window.google || !window.google.accounts) {
         throw new Error("Google Identity Services not loaded.");
     }
@@ -85,6 +85,115 @@ const initTokenClient = (clientId: string) => {
         callback: '', // defined dynamically at request time
     });
 };
+
+/**
+ * Gets a valid access token, prompting user if necessary
+ */
+const getAccessToken = (clientId: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        // Return existing token if we have one (simple caching strategy)
+        // In a real app, you'd check expiration, but for this session-based app it's usually fine
+        if (savedAccessToken) {
+            resolve(savedAccessToken);
+            return;
+        }
+
+        if (!tokenClient) {
+            try {
+                initTokenClient(clientId);
+            } catch (e) {
+                reject(e);
+                return;
+            }
+        }
+
+        tokenClient.callback = (resp: any) => {
+            if (resp.error) {
+                reject(resp);
+            } else {
+                savedAccessToken = resp.access_token;
+                resolve(resp.access_token);
+            }
+        };
+
+        tokenClient.requestAccessToken({prompt: 'consent'});
+    });
+};
+
+/**
+ * Uploads a file to Google Drive
+ */
+export const uploadToDrive = async (
+    clientId: string,
+    folderName: string,
+    fileName: string, 
+    content: Blob | string,
+    mimeType: string
+): Promise<string> => {
+    try {
+        await loadGoogleScripts();
+        const accessToken = await getAccessToken(clientId);
+
+        // 1. Find or Create Folder
+        let folderId = '';
+        const folderQuery = `mimeType='application/vnd.google-apps.folder' and name='${folderName}' and trashed=false`;
+        
+        const folderRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(folderQuery)}`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        const folderData = await folderRes.json();
+        
+        if (folderData.files && folderData.files.length > 0) {
+            folderId = folderData.files[0].id;
+        } else {
+            // Create folder
+            const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    name: folderName,
+                    mimeType: 'application/vnd.google-apps.folder'
+                })
+            });
+            const createData = await createRes.json();
+            folderId = createData.id;
+        }
+
+        // 2. Upload File (Multipart)
+        const metadata = {
+            name: fileName,
+            parents: [folderId]
+        };
+
+        const formData = new FormData();
+        formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+        
+        const fileContent = typeof content === 'string' ? new Blob([content], { type: mimeType }) : content;
+        formData.append('file', fileContent);
+
+        const uploadRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}` },
+            body: formData
+        });
+
+        if (!uploadRes.ok) {
+             const errText = await uploadRes.text();
+             throw new Error(`Upload Failed: ${errText}`);
+        }
+
+        const uploadData = await uploadRes.json();
+        return uploadData.id;
+
+    } catch (e: any) {
+        console.error("Drive Upload Error:", e);
+        throw new Error("Failed to upload to Drive: " + (e.message || "Unknown error"));
+    }
+};
+
 
 /**
  * Downloads a file from Drive using standard fetch
@@ -173,7 +282,7 @@ export const openDrivePicker = (
         loadGoogleScripts().then(() => {
             try {
                 // 3. INIT OAUTH
-                initTokenClient(clientId);
+                if (!tokenClient) initTokenClient(clientId);
 
                 if (onProgress) onProgress("Waiting for login...");
 
@@ -186,83 +295,36 @@ export const openDrivePicker = (
                     }
 
                     const accessToken = resp.access_token;
-
-                    // CRITICAL: Validate accessToken before using it
-                    if (!accessToken || typeof accessToken !== 'string') {
-                        console.error("OAuth response missing access_token:", resp);
-                        reject(new Error("OAuth authentication failed: No access token received. Please try again."));
-                        return;
-                    }
-
+                    savedAccessToken = accessToken;
+                    
                     try {
                         if (onProgress) onProgress("Opening Picker...");
-
+                        
                         // Extract App ID safely
                         let appId = '';
                         try {
                            appId = clientId.split('-')[0];
                         } catch(e) {
-                           console.warn("Could not extract App ID from Client ID. Picker might fail if projects mismatch.");
+                           console.warn("Could not extract App ID from Client ID.");
                         }
-
-                        // Validate origin components
-                        const protocol = window.location.protocol;
-                        const host = window.location.host;
-
-                        if (!protocol || !host) {
-                            throw new Error("Unable to determine application origin. Please reload the page.");
-                        }
-
-                        const origin = protocol + '//' + host;
+                        
+                        const origin = window.location.protocol + '//' + window.location.host;
 
                         // Check Picker Lib
                         if (!window.google || !window.google.picker) {
                             throw new Error("Google Picker library not loaded.");
                         }
 
-                        // Validate Picker components exist
-                        if (!google.picker.PickerBuilder) {
-                            throw new Error("Google Picker PickerBuilder not available. Library may not be fully loaded.");
-                        }
-
-                        if (!google.picker.DocsView) {
-                            throw new Error("Google Picker DocsView not available. Library may not be fully loaded.");
-                        }
-
-                        if (!google.picker.ViewId) {
-                            throw new Error("Google Picker ViewId not available. Library may not be fully loaded.");
-                        }
-
-                        // Validate all required values before building picker
-                        if (!apiKey || typeof apiKey !== 'string') {
-                            throw new Error("Invalid API Key. Please check Settings.");
-                        }
-
                         // 5. BUILD PICKER
                         const pickerBuilder = new google.picker.PickerBuilder()
                             .setDeveloperKey(apiKey)
                             .setOAuthToken(accessToken)
-                            .setOrigin(origin);
-
-                        // Add folder view
-                        pickerBuilder.addView(
-                            new google.picker.DocsView()
-                                .setIncludeFolders(true)
-                                .setSelectFolderEnabled(true)
-                        );
-
-                        // Add audio view if available
-                        if (google.picker.ViewId.DOCS_AUDIO) {
-                            pickerBuilder.addView(google.picker.ViewId.DOCS_AUDIO);
-                        }
-
-                        // Add video view if available
-                        if (google.picker.ViewId.DOCS_VIDEO) {
-                            pickerBuilder.addView(google.picker.ViewId.DOCS_VIDEO);
-                        }
+                            .setOrigin(origin)
+                            .addView(new google.picker.DocsView().setIncludeFolders(true).setSelectFolderEnabled(true))
+                            .addView(google.picker.ViewId.DOCS_AUDIO)
+                            .addView(google.picker.ViewId.DOCS_VIDEO);
                         
-                        // Only set AppId if we successfully extracted it and it's valid
-                        if (appId && typeof appId === 'string' && appId.length > 0) {
+                        if (appId) {
                             pickerBuilder.setAppId(appId);
                         }
 
@@ -270,7 +332,7 @@ export const openDrivePicker = (
                             if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
                                 const docs = data[google.picker.Response.DOCUMENTS];
                                 const results: File[] = [];
-
+                                
                                 try {
                                     let count = 0;
                                     for (const doc of docs) {
@@ -291,29 +353,21 @@ export const openDrivePicker = (
                                     console.error("Download Error", downloadErr);
                                     reject(new Error("Download failed: " + downloadErr.message));
                                 }
-
+                                
                             } else if (data[google.picker.Response.ACTION] === google.picker.Action.CANCEL) {
                                 resolve([]);
                             }
                         });
 
-                        // Build and show the picker
                         const picker = pickerBuilder.build();
                         picker.setVisible(true);
 
                     } catch (buildError: any) {
                         console.error("Picker Build Error:", buildError);
-                        let msg = buildError.message || "Failed to build Google Picker.";
-
-                        // Provide helpful hints for common errors
-                        if (msg.includes("toString")) {
-                            msg += "\n\nThis usually means the Google Picker library is not fully loaded or a configuration value is invalid. Try refreshing the page.";
-                        } else if (msg.includes("Feature not enabled")) {
-                            msg += "\n\nEnsure the Google Picker API is enabled in your Google Cloud Console project.";
-                        } else if (msg.includes("API key")) {
-                            msg += "\n\nVerify your API Key in Settings is correct and has Picker API enabled.";
+                        let msg = buildError.message || "Failed to build Picker.";
+                        if (msg.includes("Feature not enabled")) {
+                             msg += " (Ensure 'Google Picker API' is enabled in Cloud Console)";
                         }
-
                         reject(new Error(msg));
                     }
                 };

@@ -24,6 +24,7 @@ export interface TranscriptionSettings {
   googleApiKey: string;   // New: Required for Picker API (Project-specific)
   legalMode: boolean; // Enables verbatim, timestamps, and speaker ID
   autoDownloadAudio: boolean; // New: Auto-save audio on stop
+  autoDriveUpload: boolean; // New: Auto-upload to Google Drive
 }
 
 export interface TranscriptionResult {

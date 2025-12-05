@@ -30,13 +30,13 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
   if (!isOpen) return null;
 
   const handleSave = () => {
-    // Sanitize inputs on save (with null/undefined safety)
+    // Sanitize inputs on save
     const sanitizedSettings = {
         ...localSettings,
-        openaiKey: (localSettings.openaiKey || '').trim(),
-        assemblyAiKey: (localSettings.assemblyAiKey || '').trim(),
-        googleClientId: (localSettings.googleClientId || '').trim(),
-        googleApiKey: (localSettings.googleApiKey || '').trim(),
+        openaiKey: localSettings.openaiKey.trim(),
+        assemblyAiKey: localSettings.assemblyAiKey.trim(),
+        googleClientId: localSettings.googleClientId.trim(),
+        googleApiKey: localSettings.googleApiKey.trim(),
     };
     onSave(sanitizedSettings);
     onClose();
@@ -134,6 +134,31 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
              
              <div className="p-5 bg-zinc-800/30 rounded-xl border border-zinc-800 space-y-5">
                  
+                 {/* Auto-Upload Toggle */}
+                 <div className="flex items-start gap-3 pb-4 border-b border-zinc-700/50">
+                     <div className="flex-1">
+                         <label className="flex items-center justify-between cursor-pointer">
+                             <span className="text-sm font-medium text-amber-100">Auto-Upload to Google Drive</span>
+                             <div className="relative inline-block w-10 h-5 transition duration-200 ease-in-out rounded-full border border-zinc-600 bg-zinc-800">
+                                 <input
+                                     type="checkbox"
+                                     className="absolute opacity-0 w-full h-full cursor-pointer"
+                                     checked={localSettings.autoDriveUpload}
+                                     onChange={(e) => setLocalSettings({ ...localSettings, autoDriveUpload: e.target.checked })}
+                                 />
+                                 <span
+                                     className={`absolute left-0 inline-block w-5 h-5 rounded-full shadow transform transition-transform duration-200 ease-in-out ${
+                                     localSettings.autoDriveUpload ? 'translate-x-5 bg-amber-500' : 'bg-zinc-400'
+                                     }`}
+                                 />
+                             </div>
+                         </label>
+                         <p className="text-xs text-zinc-400 mt-1">
+                             Automatically creates a "GeminiWhisper" folder and uploads all transcripts and audio/video evidence.
+                         </p>
+                     </div>
+                 </div>
+
                  {/* HELPER BOX: Origin Detection */}
                  <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
                      <div className="flex items-start gap-3">

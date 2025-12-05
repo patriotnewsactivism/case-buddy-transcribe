@@ -83,12 +83,18 @@ export const encodeWAV = (samples: Float32Array, sampleRate: number = 16000, num
 
 /**
  * Processes a large Audio or Video file.
- * 1. Decodes the media using the Browser's Native Audio Engine.
- * 2. Downsamples to 16kHz.
- * 3. Preserves STEREO channels if present (critical for speaker identification).
- * 4. Returns a compact WAV Blob.
+ * 
+ * UPDATE: Added `skipConversion` for Gemini.
+ * Gemini natively supports video files. Converting video to audio in the browser
+ * is extremely CPU intensive and slow for large files. Skipping this step
+ * makes the process 10x faster.
  */
-export const processMediaFile = async (file: File): Promise<Blob> => {
+export const processMediaFile = async (file: File, skipConversion: boolean = false): Promise<Blob> => {
+    // 0. SPEED PATH: If provider supports video (Gemini), return immediately.
+    if (skipConversion) {
+      return file;
+    }
+
     // 1. FAST PATH: Small audio files (< 10MB) don't need processing
     if (file.type.startsWith('audio/') && file.size < 10 * 1024 * 1024) {
         return file;
@@ -98,16 +104,17 @@ export const processMediaFile = async (file: File): Promise<Blob> => {
     const MAX_SAFE_SIZE = 1.8 * 1024 * 1024 * 1024; // 1.8 GB
     
     if (file.size > MAX_SAFE_SIZE) {
-        console.warn(`File size (${(file.size / 1024 / 1024).toFixed(0)}MB) exceeds browser memory safety limit. Uploading original file directly.`);
+        console.warn(`File size exceeds browser memory safety limit. Uploading original file directly.`);
         return file;
     }
 
     // 3. CONVERSION PATH: Extract audio from video/audio file
+    // Only runs if we are using a provider that strictly needs Audio (like Whisper/AssemblyAI limit checks)
     try {
         const arrayBuffer = await file.arrayBuffer();
         const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
         
-        // This decodes the raw audio data (CPU intensive but fast)
+        // This decodes the raw audio data (CPU intensive)
         const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
         
         // Determine channels (Keep Stereo if available for better AI Diarization)

@@ -9,7 +9,7 @@ import { AppMode, TranscriptionStatus, TranscriptionProvider, TranscriptionSetti
 import { transcribeAudio } from './services/transcriptionService';
 import { processMediaFile } from './utils/audioUtils';
 import { downloadFile, generateFilename } from './utils/fileUtils';
-import { openDrivePicker } from './services/driveService';
+import { openDrivePicker, uploadToDrive } from './services/driveService';
 import { ArrowLeft, Plus } from 'lucide-react';
 
 const DEFAULT_SETTINGS: TranscriptionSettings = {
@@ -20,10 +20,12 @@ const DEFAULT_SETTINGS: TranscriptionSettings = {
   googleApiKey: '', // Default empty
   legalMode: false,
   autoDownloadAudio: false,
+  autoDriveUpload: false,
 };
 
 const App: React.FC = () => {
-  const [mode, setMode] = useState<AppMode>(AppMode.RECORD);
+  // CHANGED: Default mode is now UPLOAD
+  const [mode, setMode] = useState<AppMode>(AppMode.UPLOAD);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<TranscriptionSettings>(DEFAULT_SETTINGS);
   
@@ -96,16 +98,9 @@ const App: React.FC = () => {
           console.error("Drive Selection Error", e);
           
           let errorMessage = "Failed to access Google Drive.";
-          
-          // Try to extract useful Google API error message
-          if (e.result && e.result.error && e.result.error.message) {
-              errorMessage += `\n\nGoogle Error: ${e.result.error.message}`;
-          } else if (e.message) {
-              errorMessage += `\n\nDetails: ${e.message}`;
-          } else {
-              errorMessage += `\n\nUnknown Error: ${JSON.stringify(e)}`;
+          if (e.message) {
+              errorMessage += `\n\n${e.message}`;
           }
-
           alert(errorMessage);
       } finally {
           setDriveLoadingState(null);
@@ -130,21 +125,21 @@ const App: React.FC = () => {
 
     try {
         // 1. OPTIMIZE / CONVERT
-        updateItem(itemId, { status: 'PROCESSING', stage: 'Optimizing Media', progress: 5 });
+        // NOTE: If provider is GEMINI, we SKIP conversion to allow fast video upload.
+        const skipConversion = settings.provider === TranscriptionProvider.GEMINI;
+        updateItem(itemId, { status: 'PROCESSING', stage: skipConversion ? 'Uploading Media...' : 'Optimizing Audio...', progress: 5 });
         
         let fileToUpload: File | Blob = nextItem.file;
-        // Run everything through processor (handles video->audio and large file checks)
-        fileToUpload = await processMediaFile(nextItem.file);
+        fileToUpload = await processMediaFile(nextItem.file, skipConversion);
         
         // 2. TRANSCRIBE
-        updateItem(itemId, { stage: 'Uploading Evidence', progress: 15 });
+        updateItem(itemId, { stage: 'Processing Evidence...', progress: 15 });
         
         const text = await transcribeAudio(
             fileToUpload,
             '',
             settings,
             (pct) => {
-                // Map upload progress (0-100) to total progress (15-90)
                 const mappedProgress = 15 + Math.round(pct * 0.75);
                 updateItem(itemId, { 
                     stage: pct === 100 ? 'Analyzing & Transcribing...' : `Uploading (${pct}%)`, 
@@ -154,6 +149,32 @@ const App: React.FC = () => {
         );
 
         updateItem(itemId, { status: 'COMPLETED', progress: 100, transcript: text });
+
+        // 3. AUTO-SAVE TO DRIVE
+        if (settings.autoDriveUpload && settings.googleClientId) {
+             try {
+                // Upload Transcript
+                await uploadToDrive(
+                    settings.googleClientId,
+                    "GeminiWhisper", // Folder Name
+                    `Transcript_${nextItem.file.name}.txt`,
+                    text,
+                    "text/plain"
+                );
+                // Upload Audio
+                await uploadToDrive(
+                    settings.googleClientId,
+                    "GeminiWhisper",
+                    nextItem.file.name,
+                    nextItem.file,
+                    nextItem.file.type
+                );
+                console.log("Auto-save to drive successful");
+             } catch (driveErr) {
+                 console.error("Auto-save to drive failed", driveErr);
+                 // Don't fail the whole item, just log it
+             }
+        }
 
     } catch (error: any) {
         console.error(`Error processing file ${nextItem.file.name}:`, error);
@@ -187,7 +208,7 @@ const App: React.FC = () => {
       if (confirm("Clear all files and results?")) {
           setQueue([]);
           setViewingItemId(null);
-          setMode(AppMode.RECORD); // Go back to default
+          // Keep mode as is
       }
   }
 
@@ -200,7 +221,6 @@ const App: React.FC = () => {
       <Header 
         currentMode={mode} 
         setMode={(m) => {
-             // If switching to Record, we just show recorder. Queue stays in background unless cleared.
              setMode(m);
              setViewingItemId(null);
         }} 
@@ -231,17 +251,17 @@ const App: React.FC = () => {
         ) : (
             // VIEW: MAIN CONTENT
             <>
-                {/* Intro (Only show if queue is empty and recording mode) */}
-                {queue.length === 0 && mode === AppMode.RECORD && (
+                {/* Intro (Only show if queue is empty) */}
+                {queue.length === 0 && (
                     <div className="text-center mb-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
                         <h2 className="text-4xl md:text-5xl font-bold tracking-tight text-white mb-4">
-                            Turn voice into evidence.
+                           {mode === AppMode.UPLOAD ? 'Upload Evidence.' : 'Record Voice.'}
                         </h2>
                         <p className="text-lg text-zinc-400 max-w-2xl mx-auto">
-                            Record proceedings or process massive folders of video evidence.
-                            <span className="block mt-2 text-sm text-zinc-500">
-                                Smart Engine auto-extracts audio from video to bypass limits.
-                            </span>
+                            {mode === AppMode.UPLOAD 
+                                ? "Process video and audio files instantly. Gemini Engine auto-transcribes with high fidelity."
+                                : "Record proceedings directly. Audio is enhanced and transcribed in real-time."
+                            }
                         </p>
                     </div>
                 )}
