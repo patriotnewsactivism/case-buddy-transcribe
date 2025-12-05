@@ -38,8 +38,11 @@ const transcribeWithGemini = async (
   settings: TranscriptionSettings,
   onProgress?: (percent: number) => void
 ): Promise<TranscriptionResult> => {
-  const API_KEY = process.env.API_KEY || '';
-  if (!API_KEY) throw new Error("Missing Gemini API Key in environment.");
+  const API_KEY =
+    settings.geminiApiKey?.trim() ||
+    (typeof import.meta !== 'undefined' ? import.meta.env.VITE_GEMINI_API_KEY : '') ||
+    (typeof process !== 'undefined' ? process.env.API_KEY : '');
+  if (!API_KEY) throw new Error("Missing Gemini API Key. Add it in Settings.");
 
   const ai = new GoogleGenAI({ apiKey: API_KEY });
   const modelName = 'gemini-2.5-flash'; // 2.5 Flash is best for structured JSON output + speed
@@ -367,11 +370,18 @@ export const transcribeAudio = async (
   settings: TranscriptionSettings,
   onProgress?: (percent: number) => void
 ): Promise<TranscriptionResult> => {
+  const requireKey = (key: string | undefined, label: string) => {
+    if (!key || key.trim().length === 0) {
+      throw new Error(`${label} API key is missing. Open Settings and add it first.`);
+    }
+    return key.trim();
+  };
+
   switch (settings.provider) {
     case TranscriptionProvider.OPENAI:
-      return await transcribeWithOpenAI(file, settings.openaiKey, settings);
+      return await transcribeWithOpenAI(file, requireKey(settings.openaiKey, 'OpenAI'), settings);
     case TranscriptionProvider.ASSEMBLYAI:
-      return await transcribeWithAssemblyAI(file, settings.assemblyAiKey, settings, onProgress);
+      return await transcribeWithAssemblyAI(file, requireKey(settings.assemblyAiKey, 'AssemblyAI'), settings, onProgress);
     case TranscriptionProvider.GEMINI:
     default:
       return await transcribeWithGemini(file, settings, onProgress);
