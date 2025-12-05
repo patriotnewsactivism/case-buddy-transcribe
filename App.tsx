@@ -21,6 +21,7 @@ const DEFAULT_SETTINGS: TranscriptionSettings = {
   legalMode: false,
   autoDownloadAudio: false,
   autoDriveUpload: false,
+  customVocabulary: [], // Initialize empty
 };
 
 const App: React.FC = () => {
@@ -41,7 +42,9 @@ const App: React.FC = () => {
     const savedSettings = localStorage.getItem('whisper_settings');
     if (savedSettings) {
       try {
-        setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) });
+        const parsed = JSON.parse(savedSettings);
+        // Ensure customVocabulary exists for older saves
+        setSettings({ ...DEFAULT_SETTINGS, ...parsed, customVocabulary: parsed.customVocabulary || [] });
       } catch (e) {
         console.error("Failed to parse settings", e);
       }
@@ -118,7 +121,6 @@ const App: React.FC = () => {
         try {
             // 1. OPTIMIZE / CONVERT
             // Gemini natively supports Video, so we SKIP the slow audio stripping process.
-            // Other providers (OpenAI/Assembly) usually require Audio, so we process.
             const skipConversion = settings.provider === TranscriptionProvider.GEMINI;
             
             updateItem(itemId, { 
@@ -127,13 +129,13 @@ const App: React.FC = () => {
                 progress: 5 
             });
             
-            // This returns the original file if skipConversion is true (Instant!)
             const fileToProcess = await processMediaFile(nextItem.file, skipConversion);
             
             // 2. TRANSCRIBE
             updateItem(itemId, { stage: 'Processing Evidence...', progress: 15 });
             
-            const text = await transcribeAudio(
+            // Result is now an object, not a string
+            const result = await transcribeAudio(
                 fileToProcess,
                 '',
                 settings,
@@ -146,7 +148,7 @@ const App: React.FC = () => {
                 }
             );
 
-            updateItem(itemId, { status: 'COMPLETED', progress: 100, transcript: text });
+            updateItem(itemId, { status: 'COMPLETED', progress: 100, result: result });
 
             // 3. AUTO-SAVE TO DRIVE
             if (settings.autoDriveUpload && settings.googleClientId) {
@@ -156,22 +158,20 @@ const App: React.FC = () => {
                         settings.googleClientId,
                         "GeminiWhisper", 
                         `Transcript_${nextItem.file.name}.txt`,
-                        text,
+                        result.text,
                         "text/plain"
                     );
                     
-                    // Upload Original Evidence (Audio or Video)
+                    // Upload Original Evidence
                     await uploadToDrive(
                         settings.googleClientId,
                         "GeminiWhisper",
-                        nextItem.file.name, // Use original name
-                        nextItem.file,      // Upload original file
+                        nextItem.file.name, 
+                        nextItem.file,      
                         nextItem.file.type
                     );
-                    console.log("Auto-save to drive successful");
                  } catch (driveErr) {
                      console.error("Auto-save failed", driveErr);
-                     // We don't fail the batch item if drive upload fails, just log it.
                  }
             }
 
@@ -184,16 +184,16 @@ const App: React.FC = () => {
     };
 
     processNext();
-  }, [queue, settings]); // Re-runs when queue updates (e.g. status changes)
+  }, [queue, settings]);
 
   // --- HANDLERS ---
 
   const handleDownloadAll = () => {
-      const completed = queue.filter(i => i.status === 'COMPLETED' && i.transcript);
+      const completed = queue.filter(i => i.status === 'COMPLETED' && i.result);
       if (completed.length === 0) return;
 
       const combinedText = completed.map(i => {
-          return `--- FILE: ${i.file.name} ---\n\n${i.transcript}\n\n`;
+          return `--- FILE: ${i.file.name} ---\n\n${i.result?.text}\n\n`;
       }).join('\n========================================\n\n');
 
       downloadFile(combinedText, generateFilename('All_Transcripts', 'txt'), 'text/plain');
@@ -205,6 +205,12 @@ const App: React.FC = () => {
           setViewingItemId(null);
       }
   }
+
+  // Handle adding vocab from the result view
+  const handleTeachAi = (phrase: string) => {
+      const newVocab = [...settings.customVocabulary, phrase];
+      handleSaveSettings({ ...settings, customVocabulary: newVocab });
+  };
 
   const viewingItem = viewingItemId ? queue.find(i => i.id === viewingItemId) : null;
 
@@ -228,7 +234,7 @@ const App: React.FC = () => {
 
       <main className="max-w-6xl mx-auto px-4 py-12 flex flex-col items-center">
         
-        {viewingItem && viewingItem.transcript ? (
+        {viewingItem && viewingItem.result ? (
             <div className="w-full animate-in slide-in-from-right duration-300">
                 <button 
                     onClick={() => setViewingItemId(null)}
@@ -237,7 +243,11 @@ const App: React.FC = () => {
                     <ArrowLeft size={18} /> Back to Batch Queue
                 </button>
                 <h2 className="text-2xl font-bold text-white mb-6 px-1">{viewingItem.file.name}</h2>
-                <TranscriptionResult text={viewingItem.transcript} audioFile={viewingItem.file} />
+                <TranscriptionResult 
+                    result={viewingItem.result} 
+                    audioFile={viewingItem.file}
+                    onTeachAi={handleTeachAi}
+                />
             </div>
         ) : (
             <>

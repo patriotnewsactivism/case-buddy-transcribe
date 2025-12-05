@@ -1,15 +1,19 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Copy, Check, FileText, Wand2, Languages, Users, Download, Printer, ChevronDown, Music, Edit3, Save } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Copy, Check, FileText, Wand2, Languages, Users, Download, Printer, ChevronDown, Music, Edit3, Save, Play, Pause, BookOpen, Plus } from 'lucide-react';
 import { summarizeText, translateText } from '../services/geminiService';
 import { downloadFile, generateFilename, printLegalDocument } from '../utils/fileUtils';
+import { TranscriptSegment, TranscriptionResult as TranscriptionResultType, TranscriptionProvider } from '../types';
 
 interface TranscriptionResultProps {
-  text: string;
+  result: TranscriptionResultType;
   audioFile?: File | Blob | null;
+  onTeachAi?: (phrase: string) => void; // Callback to add to vocabulary
 }
 
-const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initialText, audioFile }) => {
-  const [displayText, setDisplayText] = useState(initialText);
+const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audioFile, onTeachAi }) => {
+  const [displayText, setDisplayText] = useState(result.text);
+  const [segments, setSegments] = useState<TranscriptSegment[]>(result.segments || []);
+  
   const [isEditing, setIsEditing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
@@ -18,11 +22,34 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initial
   const [isTranslating, setIsTranslating] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   
-  // Speaker Identification State
-  const [showSpeakerTools, setShowSpeakerTools] = useState(false);
-  const [speakerMap, setSpeakerMap] = useState<Record<string, string>>({});
-  
+  // Audio Player State
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [activeSegmentIndex, setActiveSegmentIndex] = useState<number | null>(null);
+
+  // Text Selection for Learning
+  const [selection, setSelection] = useState<string>('');
+
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Initialize Audio URL
+  useEffect(() => {
+    if (audioFile) {
+        const url = URL.createObjectURL(audioFile);
+        setAudioUrl(url);
+        return () => URL.revokeObjectURL(url);
+    }
+  }, [audioFile]);
+
+  // Sync state when props change
+  useEffect(() => {
+    setDisplayText(result.text);
+    setSegments(result.segments || []);
+    setSummary(null);
+    setTranslation(null);
+  }, [result]);
 
   // Close menu on outside click
   useEffect(() => {
@@ -35,41 +62,64 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initial
       return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Reset display text if prop changes
-  useEffect(() => {
-    setDisplayText(initialText);
-    setSpeakerMap({});
-    setSummary(null);
-    setTranslation(null);
-  }, [initialText]);
+  // --- AUDIO PLAYER LOGIC ---
 
-  // Extract potential speakers
-  const detectedSpeakers = useMemo(() => {
-    const regex = /\[?Speaker\s+(\w+)\]?:?/gi;
-    const matches = initialText.match(regex);
-    if (!matches) return [];
-    return Array.from(new Set(matches)).sort();
-  }, [initialText]);
-
-  // Apply speaker name changes
-  const handleSpeakerRename = (original: string, newName: string) => {
-    setSpeakerMap(prev => {
-        const updated = { ...prev, [original]: newName };
-        applySpeakerNames(updated);
-        return updated;
-    });
+  const togglePlay = () => {
+      if (audioRef.current) {
+          if (isPlaying) {
+              audioRef.current.pause();
+          } else {
+              audioRef.current.play();
+          }
+          setIsPlaying(!isPlaying);
+      }
   };
 
-  const applySpeakerNames = (map: Record<string, string>) => {
-      let newText = initialText;
-      Object.entries(map).forEach(([original, newName]) => {
-          if (newName.trim()) {
-              const escapedOriginal = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-              const regex = new RegExp(escapedOriginal, 'g');
-              newText = newText.replace(regex, newName);
+  const handleTimeUpdate = () => {
+      if (audioRef.current) {
+          const time = audioRef.current.currentTime;
+          setCurrentTime(time);
+
+          // Find active segment
+          if (segments.length > 0) {
+              const activeIdx = segments.findIndex(s => time >= s.start && time <= s.end);
+              if (activeIdx !== -1) setActiveSegmentIndex(activeIdx);
           }
-      });
-      setDisplayText(newText);
+      }
+  };
+
+  const handleSegmentClick = (start: number) => {
+      if (audioRef.current) {
+          audioRef.current.currentTime = start;
+          audioRef.current.play();
+          setIsPlaying(true);
+      }
+  };
+
+  // --- EDITING & LEARNING LOGIC ---
+
+  const handleTextSelection = () => {
+      const selectedText = window.getSelection()?.toString();
+      if (selectedText && selectedText.trim().length > 0) {
+          setSelection(selectedText.trim());
+      } else {
+          setSelection('');
+      }
+  };
+
+  const handleTeachAi = () => {
+      if (selection && onTeachAi) {
+          onTeachAi(selection);
+          alert(`Added "${selection}" to Vocabulary. Future transcriptions will prioritize this spelling.`);
+          setSelection('');
+          window.getSelection()?.removeAllRanges();
+      }
+  };
+
+  const handleSaveEdit = () => {
+      setIsEditing(false);
+      // In a real app, you'd parse the Edited Text back into segments here
+      // For now, we just save the text block.
   };
 
   const handleCopy = () => {
@@ -78,8 +128,9 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initial
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // --- AI ACTIONS ---
+
   const handleSummarize = async () => {
-    if (!displayText) return;
     setIsSummarizing(true);
     try {
       const result = await summarizeText(displayText);
@@ -92,7 +143,6 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initial
   };
 
   const handleTranslate = async () => {
-    if (!displayText) return;
     setIsTranslating(true);
     try {
       const result = await translateText(displayText, "Spanish");
@@ -104,211 +154,179 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ text: initial
     }
   };
 
-  // Export Handlers
-  const handleExportText = () => {
-      downloadFile(displayText, generateFilename('Transcript', 'txt'), 'text/plain');
-      setShowExportMenu(false);
-  };
-
-  const handleExportJSON = () => {
-      const data = JSON.stringify({
-          transcript: displayText,
-          summary: summary,
-          timestamp: new Date().toISOString(),
-          speakers: speakerMap
-      }, null, 2);
-      downloadFile(data, generateFilename('Case_Data', 'json'), 'application/json');
-      setShowExportMenu(false);
-  };
-
-  const handlePrintLegal = () => {
-      printLegalDocument(displayText);
-      setShowExportMenu(false);
-  };
-
-  const handleDownloadAudio = () => {
-    if (!audioFile) return;
-    // Determine extension/type
-    const ext = audioFile.type.includes('video') ? 'mp4' : 'webm';
-    downloadFile(audioFile, generateFilename('Evidence_Original', ext), audioFile.type);
-    setShowExportMenu(false);
-  };
-
   return (
-    <div className="w-full max-w-4xl mx-auto space-y-6 animate-in slide-in-from-bottom-4 duration-500 pb-20">
+    <div className="w-full max-w-5xl mx-auto space-y-6 animate-in slide-in-from-bottom-4 duration-500 pb-32">
       
+      {/* Hidden Audio Element */}
+      {audioUrl && (
+          <audio 
+            ref={audioRef} 
+            src={audioUrl} 
+            onTimeUpdate={handleTimeUpdate}
+            onEnded={() => setIsPlaying(false)}
+            onPause={() => setIsPlaying(false)}
+            onPlay={() => setIsPlaying(true)}
+            className="hidden"
+          />
+      )}
+
       {/* Toolbar */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 p-2 bg-zinc-900/50 border border-zinc-800 rounded-xl">
-        <div className="flex items-center gap-2 px-3">
-          <FileText size={18} className="text-indigo-400" />
-          <span className="text-sm font-medium text-zinc-300">Transcription</span>
+      <div className="sticky top-20 z-40 flex flex-col md:flex-row items-center justify-between gap-4 p-3 bg-zinc-900/80 backdrop-blur-md border border-zinc-800 rounded-xl shadow-2xl">
+        
+        {/* Audio Controls */}
+        <div className="flex items-center gap-4 w-full md:w-auto">
+             <button 
+                onClick={togglePlay}
+                className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center text-white transition-all hover:scale-105"
+             >
+                 {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
+             </button>
+             <div className="flex-1 md:w-48">
+                 <div className="text-xs text-zinc-400 font-mono mb-1">
+                     {audioRef.current ? new Date(currentTime * 1000).toISOString().substr(14, 5) : "00:00"} / 
+                     {audioRef.current?.duration ? new Date(audioRef.current.duration * 1000).toISOString().substr(14, 5) : "--:--"}
+                 </div>
+                 <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden w-full cursor-pointer" onClick={(e) => {
+                     if(!audioRef.current) return;
+                     const rect = e.currentTarget.getBoundingClientRect();
+                     const pos = (e.clientX - rect.left) / rect.width;
+                     audioRef.current.currentTime = pos * audioRef.current.duration;
+                 }}>
+                     <div className="h-full bg-indigo-500" style={{ width: `${audioRef.current && audioRef.current.duration ? (currentTime / audioRef.current.duration) * 100 : 0}%` }} />
+                 </div>
+             </div>
         </div>
         
-        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-           
+        <div className="flex items-center gap-2">
            {/* Edit Toggle */}
            <button
-             onClick={() => setIsEditing(!isEditing)}
+             onClick={() => isEditing ? handleSaveEdit() : setIsEditing(true)}
              className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all
                ${isEditing
-                 ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' 
+                 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 animate-pulse' 
                  : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}`}
            >
              {isEditing ? <Save size={14} /> : <Edit3 size={14} />}
-             {isEditing ? 'Done Editing' : 'Edit Text'}
+             {isEditing ? 'Save Changes' : 'Edit Text'}
            </button>
 
-           <div className="w-px h-6 bg-zinc-800 mx-1 hidden md:block"></div>
-
-           {/* Speaker Toggle */}
-           {detectedSpeakers.length > 0 && !isEditing && (
+            {/* Teaching Tool */}
+            {selection && (
                 <button
-                    onClick={() => setShowSpeakerTools(!showSpeakerTools)}
-                    className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all
-                    ${showSpeakerTools
-                        ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' 
-                        : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}`}
+                    onClick={handleTeachAi}
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border bg-amber-500/10 text-amber-400 border-amber-500/20 hover:bg-amber-500/20 transition-all animate-in zoom-in"
                 >
-                    <Users size={14} />
-                    {showSpeakerTools ? 'Hide Speakers' : 'Identify Speakers'}
+                    <BookOpen size={14} />
+                    Teach "{selection.length > 15 ? selection.substring(0, 12) + '...' : selection}"
                 </button>
-           )}
+            )}
 
-           <button
-            onClick={handleSummarize}
-            disabled={isSummarizing || !!summary}
-            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all
-              ${summary 
-                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
-                : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}`}
-          >
-            <Wand2 size={14} />
-            {isSummarizing ? 'Summarizing...' : summary ? 'Summarized' : 'Summarize'}
-          </button>
+           <button onClick={handleSummarize} disabled={isSummarizing || !!summary} className="p-2 text-zinc-400 hover:text-white bg-zinc-800 rounded-lg border border-zinc-700">
+             <Wand2 size={16} />
+           </button>
           
-          <button
-            onClick={handleTranslate}
-            disabled={isTranslating || !!translation}
-            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all
-              ${translation
-                ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' 
-                : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'}`}
-          >
-            <Languages size={14} />
-            {isTranslating ? 'Translating...' : translation ? 'Translated (ES)' : 'Translate'}
-          </button>
+           <button onClick={handleTranslate} disabled={isTranslating || !!translation} className="p-2 text-zinc-400 hover:text-white bg-zinc-800 rounded-lg border border-zinc-700">
+             <Languages size={16} />
+           </button>
 
-          {/* Export Dropdown */}
-          <div className="relative" ref={menuRef}>
+           <div className="relative" ref={menuRef}>
             <button
                 onClick={() => setShowExportMenu(!showExportMenu)}
                 className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-white text-black hover:bg-zinc-200 rounded-lg transition-colors"
             >
                 <Download size={14} />
                 Export
-                <ChevronDown size={12} />
             </button>
-            
             {showExportMenu && (
-                <div className="absolute right-0 mt-2 w-52 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl overflow-hidden z-20 animate-in fade-in zoom-in-95 duration-100">
-                    <button onClick={handlePrintLegal} className="w-full text-left px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 hover:text-white flex items-center gap-2">
-                        <Printer size={16} /> Legal PDF / Print
-                    </button>
-                    <button onClick={handleExportText} className="w-full text-left px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 hover:text-white flex items-center gap-2">
-                        <FileText size={16} /> Text File (.txt)
-                    </button>
-                    <button onClick={handleExportJSON} className="w-full text-left px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 hover:text-white flex items-center gap-2">
-                        <div className="font-mono text-xs opacity-70">{'{ }'}</div> JSON Metadata
-                    </button>
-                    {audioFile && (
-                        <button onClick={handleDownloadAudio} className="w-full text-left px-4 py-3 text-sm text-emerald-400 hover:bg-zinc-800 hover:text-emerald-300 flex items-center gap-2 border-t border-zinc-800">
-                           <Music size={16} /> Save Original Audio
-                        </button>
-                    )}
+                <div className="absolute right-0 mt-2 w-48 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl z-50">
+                     <button onClick={() => downloadFile(displayText, generateFilename('Transcript', 'txt'), 'text/plain')} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+                        Text File
+                     </button>
+                     <button onClick={() => printLegalDocument(displayText)} className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+                        Legal Print
+                     </button>
                 </div>
             )}
-          </div>
+           </div>
         </div>
       </div>
 
-      {/* Speaker Renaming Panel */}
-      {showSpeakerTools && detectedSpeakers.length > 0 && !isEditing && (
-          <div className="p-4 bg-indigo-950/20 border border-indigo-900/50 rounded-xl animate-in slide-in-from-top-2">
-              <h4 className="text-xs font-semibold text-indigo-300 uppercase tracking-wider mb-3">
-                  Map Speaker Labels to Real Names
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                  {detectedSpeakers.map((speakerTag, idx) => (
-                      <div key={idx} className="flex items-center gap-2 bg-zinc-900/80 p-2 rounded-lg border border-zinc-800">
-                          <span className="text-xs text-zinc-500 whitespace-nowrap">{speakerTag}</span>
-                          <span className="text-zinc-600">→</span>
-                          <input 
-                            type="text" 
-                            placeholder="Enter Name..."
-                            className="w-full bg-transparent border-none text-sm text-white focus:outline-none placeholder-zinc-700"
-                            value={speakerMap[speakerTag] || ''}
-                            onChange={(e) => handleSpeakerRename(speakerTag, e.target.value)}
-                          />
+      {/* Main Content Area */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          
+          {/* Transcript Display */}
+          <div className="md:col-span-2 space-y-4">
+              <div 
+                className="bg-zinc-900 rounded-2xl border border-zinc-800 p-6 min-h-[500px]"
+                onMouseUp={handleTextSelection} // Capture selection for "Learning"
+              >
+                  {isEditing ? (
+                      <textarea
+                        value={displayText}
+                        onChange={(e) => setDisplayText(e.target.value)}
+                        className="w-full h-full min-h-[500px] bg-transparent font-mono text-sm leading-relaxed text-zinc-300 focus:outline-none resize-none"
+                      />
+                  ) : (
+                      <div className="space-y-4">
+                          {/* If we have segments, render interactive mode. Else render plain text. */}
+                          {segments.length > 0 ? (
+                              segments.map((seg, idx) => (
+                                  <div 
+                                    key={idx} 
+                                    onClick={() => handleSegmentClick(seg.start)}
+                                    className={`
+                                        group relative pl-4 border-l-2 transition-all duration-200 cursor-pointer hover:bg-zinc-800/50 p-2 rounded-r-lg
+                                        ${idx === activeSegmentIndex 
+                                            ? 'border-indigo-500 bg-indigo-500/10' 
+                                            : 'border-transparent hover:border-zinc-700'}
+                                    `}
+                                  >
+                                      <div className="flex items-baseline gap-3 mb-1">
+                                          <span className={`text-[10px] font-bold uppercase tracking-wider ${idx === activeSegmentIndex ? 'text-indigo-400' : 'text-zinc-500'}`}>
+                                              {seg.speaker || `Speaker`}
+                                          </span>
+                                          <span className="text-[10px] font-mono text-zinc-600">
+                                              {new Date(seg.start * 1000).toISOString().substr(14, 5)}
+                                          </span>
+                                      </div>
+                                      <p className={`text-base leading-relaxed ${idx === activeSegmentIndex ? 'text-white' : 'text-zinc-300 group-hover:text-zinc-200'}`}>
+                                          {seg.text}
+                                      </p>
+                                  </div>
+                              ))
+                          ) : (
+                              <p className="whitespace-pre-wrap leading-relaxed text-zinc-300 font-mono">
+                                  {displayText}
+                              </p>
+                          )}
                       </div>
-                  ))}
+                  )}
               </div>
           </div>
-      )}
 
-      {/* Main Text Content */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Original Transcript */}
-          <div className={`p-6 bg-zinc-900 rounded-2xl border border-zinc-800 shadow-sm ${summary || translation ? '' : 'md:col-span-2'}`}>
-            <div className="flex justify-between items-center mb-4">
-                <h3 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider">Original Text</h3>
-                <div className="flex items-center gap-3">
-                    {isEditing && <span className="text-xs text-blue-400 font-medium animate-pulse">Editing...</span>}
-                    <button onClick={handleCopy} className="text-xs text-zinc-500 hover:text-zinc-300 flex items-center gap-1">
-                        {copied ? <Check size={12}/> : <Copy size={12}/>} {copied ? 'Copied' : 'Copy Text'}
-                    </button>
-                </div>
-            </div>
-            <div className="prose prose-invert prose-zinc max-w-none">
-              {isEditing ? (
-                  <textarea
-                    value={displayText}
-                    onChange={(e) => setDisplayText(e.target.value)}
-                    className="w-full h-[500px] bg-zinc-950/50 border border-zinc-700 rounded-lg p-4 font-mono text-sm md:text-base text-zinc-100 focus:outline-none focus:border-indigo-500 resize-y"
-                  />
-              ) : (
-                  <p className="whitespace-pre-wrap leading-relaxed text-zinc-100 font-mono text-sm md:text-base">
-                    {displayText}
-                  </p>
-              )}
-            </div>
+          {/* Sidebar (Summary / Translation) */}
+          <div className="space-y-4">
+             {(summary || translation) && (
+                 <div className="sticky top-40 space-y-4 animate-in slide-in-from-right">
+                    {summary && (
+                        <div className="p-5 bg-emerald-950/30 border border-emerald-900/50 rounded-xl">
+                            <h3 className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                <Wand2 size={12}/> Summary
+                            </h3>
+                            <p className="text-sm text-emerald-100/80 leading-relaxed">{summary}</p>
+                        </div>
+                    )}
+                    {translation && (
+                        <div className="p-5 bg-purple-950/30 border border-purple-900/50 rounded-xl">
+                            <h3 className="text-xs font-bold text-purple-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                <Languages size={12}/> Translation
+                            </h3>
+                            <p className="text-sm text-purple-100/80 leading-relaxed">{translation}</p>
+                        </div>
+                    )}
+                 </div>
+             )}
           </div>
-
-          {/* Side Panel for Summary/Translation */}
-          {(summary || translation) && (
-             <div className="space-y-6">
-                {summary && (
-                    <div className="p-6 bg-emerald-950/20 rounded-2xl border border-emerald-900/50 animate-in fade-in zoom-in duration-300">
-                        <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                            <Wand2 size={16} /> Summary
-                        </h3>
-                        <div className="prose prose-invert prose-sm prose-emerald">
-                            <p className="whitespace-pre-wrap leading-relaxed text-emerald-100/90">{summary}</p>
-                        </div>
-                    </div>
-                )}
-                
-                {translation && (
-                    <div className="p-6 bg-purple-950/20 rounded-2xl border border-purple-900/50 animate-in fade-in zoom-in duration-300">
-                        <h3 className="text-sm font-semibold text-purple-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                             <Languages size={16} /> Translation (Spanish)
-                        </h3>
-                        <div className="prose prose-invert prose-sm prose-purple">
-                            <p className="whitespace-pre-wrap leading-relaxed text-purple-100/90">{translation}</p>
-                        </div>
-                    </div>
-                )}
-             </div>
-          )}
       </div>
     </div>
   );

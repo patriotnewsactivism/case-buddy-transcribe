@@ -1,3 +1,4 @@
+
 export enum AppMode {
   UPLOAD = 'UPLOAD',
   RECORD = 'RECORD',
@@ -25,10 +26,19 @@ export interface TranscriptionSettings {
   legalMode: boolean; // Enables verbatim, timestamps, and speaker ID
   autoDownloadAudio: boolean; // New: Auto-save audio on stop
   autoDriveUpload: boolean; // New: Auto-upload to Google Drive
+  customVocabulary: string[]; // New: List of words/phrases to teach the AI
+}
+
+export interface TranscriptSegment {
+  start: number; // Start time in seconds
+  end: number;   // End time in seconds
+  speaker: string;
+  text: string;
 }
 
 export interface TranscriptionResult {
-  text: string;
+  text: string; // Fallback plain text
+  segments?: TranscriptSegment[]; // Structured data for click-to-play
   summary?: string;
   detectedLanguage?: string;
   providerUsed: TranscriptionProvider;
@@ -40,7 +50,7 @@ export interface BatchItem {
   status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'ERROR';
   stage: string; // e.g. "Extracting Audio", "Uploading"
   progress: number;
-  transcript?: string;
+  result?: TranscriptionResult; // Changed from 'transcript' string to object
   error?: string;
 }
 
