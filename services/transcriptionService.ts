@@ -307,6 +307,9 @@ const mapWordsToSegments = (words?: AssemblyWordResponse[]): TranscriptSegment[]
 export const mapAssemblyResponseToResult = (
     transcript: AssemblyTranscriptResponse
 ): TranscriptionResult => {
+    const isPlaceholderTranscriptText = (text?: string) =>
+        Boolean(text && text.trim().toLowerCase() === "assemblyai support pending update to json schema");
+
     const segmentsFromUtterances = transcript.utterances?.map((utterance, index) => {
         const speakerLabel = formatSpeakerLabel(utterance.speaker, index + 1);
 
@@ -326,7 +329,9 @@ export const mapAssemblyResponseToResult = (
     const combinedTextFromSegments = segments?.map((s) => s.text).join(" ").trim();
     const resolvedText = combinedTextFromSegments && combinedTextFromSegments.length > 0
         ? combinedTextFromSegments
-        : transcript.text || "";
+        : !isPlaceholderTranscriptText(transcript.text) && transcript.text
+            ? transcript.text
+            : "";
 
     return {
         text: resolvedText,

@@ -73,4 +73,18 @@ describe('mapAssemblyResponseToResult', () => {
 
     expect(result.text).toBe('Actual transcript');
   });
+
+  it('drops placeholder transcript text when no segment content exists', () => {
+    const response = {
+      ...baseTranscript,
+      text: 'AssemblyAI Support pending update to JSON schema',
+      utterances: [],
+      words: [],
+    };
+
+    const result = mapAssemblyResponseToResult(response);
+
+    expect(result.segments).toBeUndefined();
+    expect(result.text).toBe('');
+  });
 });
