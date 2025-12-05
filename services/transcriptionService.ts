@@ -44,8 +44,12 @@ const transcribeWithGemini = async (
   const ai = new GoogleGenAI({ apiKey: API_KEY });
   const modelName = settings.legalMode ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
 
-  let prompt = "Please transcribe the following audio file accurately. Format with clear paragraph breaks.";
+  // Default Prompt
+  let prompt = `Transcribe the audio file accurately.
+  - Format with clear paragraph breaks.
+  - PHONETIC CORRECTION: Automatically correct obvious phonetic mismatches based on context (e.g., "reel a state" -> "real estate").`;
   
+  // Legal Mode Prompt (High Fidelity)
   if (settings.legalMode) {
     prompt = `You are an expert Court Reporter. Transcribe the attached audio file for a legal case.
     
@@ -61,7 +65,10 @@ const transcribeWithGemini = async (
 
     ACCURACY & EDITING RULES:
     1. VERBATIM: Keep the sentence structure, slang, and grammar exactly as spoken.
-    2. OBVIOUS ERRORS: If a word is clearly a phonetic error (e.g., "reel a state" instead of "real estate"), CORRECT IT based on context.
+    2. CONTEXTUAL CORRECTION: You MUST correct phonetic errors where the audio is clear but a literal transcription would be nonsensical.
+       - Example: Correct "reel a state" to "real estate".
+       - Example: Correct "four the record" to "for the record".
+       - Example: Correct "in tent" to "intent" based on context.
     3. HESITATIONS: Keep 'um' and 'ah' only if they indicate significant hesitation or are relevant to the witness's credibility. Otherwise, remove minor stutters for readability.
     `;
   }
@@ -182,7 +189,7 @@ const transcribeWithOpenAI = async (
   formData.append("model", "whisper-1");
   
   if (settings.legalMode) {
-    formData.append("prompt", "Transcribe verbatim with Speaker labels (Speaker 1, Speaker 2). Correct obvious phonetic errors.");
+    formData.append("prompt", "Transcribe verbatim with Speaker labels (Speaker 1, Speaker 2). Correct obvious phonetic errors like 'real estate' instead of 'reel a state'.");
   }
 
   const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
