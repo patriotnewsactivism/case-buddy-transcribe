@@ -15,7 +15,6 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
   const [showAssemblyKey, setShowAssemblyKey] = useState(false);
   const [showGoogleClientId, setShowGoogleClientId] = useState(false);
   const [showGoogleApiKey, setShowGoogleApiKey] = useState(false);
-  const [showGeminiKey, setShowGeminiKey] = useState(false);
   
   const [currentOrigin, setCurrentOrigin] = useState('');
   const [copiedOrigin, setCopiedOrigin] = useState(false);
@@ -37,7 +36,6 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
     // Sanitize inputs on save
     const sanitizedSettings = {
         ...localSettings,
-        geminiApiKey: localSettings.geminiApiKey?.trim() || '',
         openaiKey: localSettings.openaiKey.trim(),
         assemblyAiKey: localSettings.assemblyAiKey.trim(),
         googleClientId: localSettings.googleClientId.trim(),
@@ -245,8 +243,8 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">Transcription Engine</h3>
              </div>
              
-            <div className="p-4 bg-zinc-800/30 rounded-xl border border-zinc-800">
-               <div className="grid grid-cols-3 gap-2">
+             <div className="p-4 bg-zinc-800/30 rounded-xl border border-zinc-800">
+                <div className="grid grid-cols-3 gap-2">
                     {[
                         { id: TranscriptionProvider.GEMINI, label: 'Gemini (Default)' },
                         { id: TranscriptionProvider.OPENAI, label: 'Whisper' },
@@ -264,81 +262,6 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
                         {provider.label}
                         </button>
                     ))}
-                </div>
-
-                {/* Provider Keys */}
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                        <label className="text-xs font-medium text-zinc-300 flex items-center gap-2">
-                            <Key size={14} /> Gemini API Key
-                        </label>
-                        <div className="relative">
-                            <input
-                                type={showGeminiKey ? 'text' : 'password'}
-                                value={localSettings.geminiApiKey || ''}
-                                onChange={(e) => setLocalSettings({ ...localSettings, geminiApiKey: e.target.value })}
-                                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 pr-10 text-sm text-white focus:outline-none focus:border-indigo-500"
-                                placeholder="Required for Gemini"
-                            />
-                            <button
-                                type="button"
-                                onClick={() => setShowGeminiKey(!showGeminiKey)}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white"
-                                aria-label={showGeminiKey ? 'Hide Gemini API key' : 'Show Gemini API key'}
-                            >
-                                {showGeminiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                            </button>
-                        </div>
-                        <p className="text-[11px] text-zinc-500">Stored locally in your browser. Needed for Gemini transcripts.</p>
-                    </div>
-
-                    <div className="space-y-2">
-                        <label className="text-xs font-medium text-zinc-300 flex items-center gap-2">
-                            <Key size={14} /> OpenAI API Key
-                        </label>
-                        <div className="relative">
-                            <input
-                                type={showOpenAIKey ? 'text' : 'password'}
-                                value={localSettings.openaiKey || ''}
-                                onChange={(e) => setLocalSettings({ ...localSettings, openaiKey: e.target.value })}
-                                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 pr-10 text-sm text-white focus:outline-none focus:border-indigo-500"
-                                placeholder="Whisper key"
-                            />
-                            <button
-                                type="button"
-                                onClick={() => setShowOpenAIKey(!showOpenAIKey)}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white"
-                                aria-label={showOpenAIKey ? 'Hide OpenAI API key' : 'Show OpenAI API key'}
-                            >
-                                {showOpenAIKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                            </button>
-                        </div>
-                        <p className="text-[11px] text-zinc-500">Used for Whisper transcriptions.</p>
-                    </div>
-
-                    <div className="space-y-2">
-                        <label className="text-xs font-medium text-zinc-300 flex items-center gap-2">
-                            <Key size={14} /> AssemblyAI API Key
-                        </label>
-                        <div className="relative">
-                            <input
-                                type={showAssemblyKey ? 'text' : 'password'}
-                                value={localSettings.assemblyAiKey || ''}
-                                onChange={(e) => setLocalSettings({ ...localSettings, assemblyAiKey: e.target.value })}
-                                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 pr-10 text-sm text-white focus:outline-none focus:border-indigo-500"
-                                placeholder="AssemblyAI key"
-                            />
-                            <button
-                                type="button"
-                                onClick={() => setShowAssemblyKey(!showAssemblyKey)}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white"
-                                aria-label={showAssemblyKey ? 'Hide AssemblyAI API key' : 'Show AssemblyAI API key'}
-                            >
-                                {showAssemblyKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                            </button>
-                        </div>
-                        <p className="text-[11px] text-zinc-500">Supports speaker labels and word boosting.</p>
-                    </div>
                 </div>
              </div>
           </div>

@@ -19,7 +19,6 @@ export enum TranscriptionProvider {
 
 export interface TranscriptionSettings {
   provider: TranscriptionProvider;
-  geminiApiKey?: string;
   openaiKey: string;
   assemblyAiKey: string;
   googleClientId: string; // New: For Google Drive Integration

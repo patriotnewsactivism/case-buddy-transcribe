@@ -83,11 +83,7 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
           // Find active segment
           if (segments.length > 0) {
               const activeIdx = segments.findIndex(s => time >= s.start && time <= s.end);
-              if (activeIdx !== -1) {
-                  setActiveSegmentIndex(activeIdx);
-              } else {
-                  setActiveSegmentIndex(null);
-              }
+              if (activeIdx !== -1) setActiveSegmentIndex(activeIdx);
           }
       }
   };

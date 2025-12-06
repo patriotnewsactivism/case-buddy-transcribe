@@ -14,7 +14,6 @@ import { ArrowLeft } from 'lucide-react';
 
 const DEFAULT_SETTINGS: TranscriptionSettings = {
   provider: TranscriptionProvider.GEMINI,
-  geminiApiKey: '',
   openaiKey: '',
   assemblyAiKey: '',
   googleClientId: '',
@@ -45,12 +44,7 @@ const App: React.FC = () => {
       try {
         const parsed = JSON.parse(savedSettings);
         // Ensure customVocabulary exists for older saves
-        setSettings({
-          ...DEFAULT_SETTINGS,
-          ...parsed,
-          customVocabulary: parsed.customVocabulary || [],
-          geminiApiKey: parsed.geminiApiKey || '',
-        });
+        setSettings({ ...DEFAULT_SETTINGS, ...parsed, customVocabulary: parsed.customVocabulary || [] });
       } catch (e) {
         console.error("Failed to parse settings", e);
       }

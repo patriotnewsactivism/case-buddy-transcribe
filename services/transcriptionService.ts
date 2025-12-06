@@ -38,11 +38,8 @@ const transcribeWithGemini = async (
   settings: TranscriptionSettings,
   onProgress?: (percent: number) => void
 ): Promise<TranscriptionResult> => {
-  const API_KEY =
-    settings.geminiApiKey?.trim() ||
-    (typeof import.meta !== 'undefined' ? import.meta.env.VITE_GEMINI_API_KEY : '') ||
-    (typeof process !== 'undefined' ? process.env.API_KEY : '');
-  if (!API_KEY) throw new Error("Missing Gemini API Key. Add it in Settings.");
+  const API_KEY = process.env.API_KEY || '';
+  if (!API_KEY) throw new Error("Missing Gemini API Key in environment.");
 
   const ai = new GoogleGenAI({ apiKey: API_KEY });
   const modelName = 'gemini-2.5-flash'; // 2.5 Flash is best for structured JSON output + speed
@@ -239,202 +236,125 @@ const transcribeWithOpenAI = async (
   };
 };
 
-interface AssemblyWordResponse {
-    start: number;
-    end: number;
-    text: string;
-    speaker?: string | number;
-    punctuated_word?: string;
-}
-
-interface AssemblyUtteranceResponse {
-    start: number;
-    end: number;
-    speaker?: string | number;
-    text: string;
-}
-
-interface AssemblyTranscriptResponse {
-    id: string;
-    status: string;
-    text?: string;
-    language_code?: string;
-    error?: string;
-    utterances?: AssemblyUtteranceResponse[];
-    words?: AssemblyWordResponse[];
-}
-
-const formatSpeakerLabel = (speaker: string | number | undefined, fallbackIndex: number) => {
-    if (speaker === undefined || speaker === null || `${speaker}`.trim().length === 0) {
-        return `Speaker ${fallbackIndex}`;
-    }
-    return `Speaker ${speaker}`;
-};
-
-const mapWordsToSegments = (words?: AssemblyWordResponse[]): TranscriptSegment[] | undefined => {
-    if (!words || words.length === 0) return undefined;
-
-    const segments: TranscriptSegment[] = [];
-    let current: TranscriptSegment | null = null;
-    let fallbackSpeakerIndex = 1;
-
-    words.forEach((word) => {
-        const speakerLabel =
-            word.speaker === undefined || word.speaker === null || `${word.speaker}`.trim().length === 0
-                ? current?.speaker || `Speaker ${fallbackSpeakerIndex++}`
-                : formatSpeakerLabel(word.speaker, fallbackSpeakerIndex);
-        const token = word.punctuated_word?.trim() || word.text.trim();
-        if (!token) return;
-
-        if (current && current.speaker === speakerLabel) {
-            current.text = `${current.text} ${token}`.trim();
-            current.end = word.end / 1000;
-        } else {
-            if (current) segments.push(current);
-            current = {
-                start: word.start / 1000,
-                end: word.end / 1000,
-                speaker: speakerLabel,
-                text: token,
-            };
-        }
-    });
-
-    if (current) segments.push(current);
-    return segments;
-};
-
-export const mapAssemblyResponseToResult = (
-    transcript: AssemblyTranscriptResponse
-): TranscriptionResult => {
-    const segmentsFromUtterances = transcript.utterances?.map((utterance, index) => {
-        const speakerLabel = formatSpeakerLabel(utterance.speaker, index + 1);
-
-        return {
-            start: utterance.start / 1000,
-            end: utterance.end / 1000,
-            speaker: speakerLabel,
-            text: utterance.text,
-        } as TranscriptSegment;
-    });
-
-    const segments =
-        (segmentsFromUtterances && segmentsFromUtterances.length > 0
-            ? segmentsFromUtterances
-            : undefined) || mapWordsToSegments(transcript.words);
-
-    return {
-        text: transcript.text || segments?.map((s) => s.text).join(" ") || "",
-        segments: segments && segments.length > 0 ? segments : undefined,
-        detectedLanguage: transcript.language_code,
-        providerUsed: TranscriptionProvider.ASSEMBLYAI,
-    };
-};
-
-// --- ASSEMBLYAI (Legacy support - returns string) ---
+// --- ASSEMBLYAI ---
 const transcribeWithAssemblyAI = async (
   audioFile: Blob | File,
   apiKey: string,
   settings: TranscriptionSettings,
   onProgress?: (percent: number) => void
 ): Promise<TranscriptionResult> => {
-    if (!apiKey) throw new Error("AssemblyAI API Key is missing.");
+    if (!apiKey) throw new Error("AssemblyAI API Key is missing. Please check Settings.");
 
-    const uploadResponse = await fetch("https://api.assemblyai.com/v2/upload", {
-        method: "POST",
-        headers: {
-            authorization: apiKey,
-        },
-        body: audioFile,
-    });
-
-    if (!uploadResponse.ok) {
-        throw new Error("Failed to upload audio to AssemblyAI.");
-    }
-
-    const uploadData = await uploadResponse.json();
-    const audioUrl = uploadData.upload_url as string;
-    if (!audioUrl) {
-        throw new Error("AssemblyAI upload URL missing in response.");
-    }
-
-    const transcriptionPayload: Record<string, unknown> = {
-        audio_url: audioUrl,
-        speaker_labels: true,
-        format_text: !settings.legalMode,
-        disfluencies: settings.legalMode,
-        word_boost: settings.customVocabulary?.length ? settings.customVocabulary : undefined,
-    };
-
-    const transcriptResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
-        method: "POST",
-        headers: {
-            authorization: apiKey,
-            "content-type": "application/json",
-        },
-        body: JSON.stringify(transcriptionPayload),
-    });
-
-    if (!transcriptResponse.ok) {
-        throw new Error("Failed to start AssemblyAI transcription.");
-    }
-
-    const { id } = (await transcriptResponse.json()) as { id: string };
-    if (!id) throw new Error("AssemblyAI did not return a transcript ID.");
-
-    const maxAttempts = 120; // up to 10 minutes (5s interval)
-    let attempt = 0;
-
-    while (attempt < maxAttempts) {
-        const statusResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
-            headers: { authorization: apiKey },
-        });
-
-        if (!statusResponse.ok) {
-            throw new Error("Failed to poll AssemblyAI transcript status.");
-        }
-
-        const transcript = (await statusResponse.json()) as AssemblyTranscriptResponse;
-
-        if (transcript.status === "completed") {
-            return mapAssemblyResponseToResult(transcript);
-        }
-
-        if (transcript.status === "error") {
-            throw new Error(transcript.error || "AssemblyAI transcription failed.");
-        }
-
-        attempt++;
+    // 1. Upload File
+    const uploadUrl = await new Promise<string>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', 'https://api.assemblyai.com/v2/upload');
+        xhr.setRequestHeader('Authorization', apiKey);
+        
         if (onProgress) {
-            const percent = Math.min(99, Math.round((attempt / maxAttempts) * 100));
-            onProgress(percent);
+            xhr.upload.onprogress = (event) => {
+                if (event.lengthComputable) {
+                   const percentComplete = Math.round((event.loaded / event.total) * 30); // Upload is ~30% of perceived time
+                   onProgress(percentComplete);
+                }
+            };
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        xhr.onload = () => {
+            if (xhr.status === 200) {
+                const response = JSON.parse(xhr.responseText);
+                resolve(response.upload_url);
+            } else {
+                reject(new Error(`AssemblyAI Upload failed: ${xhr.statusText}`));
+            }
+        };
+        xhr.onerror = () => reject(new Error("Network error during AssemblyAI upload"));
+        xhr.send(audioFile);
+    });
+
+    // 2. Request Transcription
+    const response = await fetch('https://api.assemblyai.com/v2/transcript', {
+        method: 'POST',
+        headers: {
+            'Authorization': apiKey,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            audio_url: uploadUrl,
+            speaker_labels: true,
+            word_boost: settings.customVocabulary,
+            boost_param: settings.customVocabulary.length > 0 ? 'high' : undefined
+        }),
+    });
+
+    if (!response.ok) {
+        throw new Error(`AssemblyAI Transcription Request failed: ${response.statusText}`);
     }
 
-    throw new Error("AssemblyAI transcription timed out. Please try again with a shorter clip.");
+    const { id } = await response.json();
+
+    // 3. Poll for Completion
+    let pollingAttempt = 0;
+    while (true) {
+        pollingAttempt++;
+        const pollingResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
+            headers: { 'Authorization': apiKey },
+        });
+        const result = await pollingResponse.json();
+
+        if (result.status === 'completed') {
+            if (onProgress) onProgress(100);
+
+            // Map AssemblyAI utterances to our TranscriptSegment format
+            const segments: TranscriptSegment[] = (result.utterances || []).map((u: any) => ({
+                start: u.start / 1000, // Convert ms to seconds
+                end: u.end / 1000,
+                speaker: `Speaker ${u.speaker}`,
+                text: u.text
+            }));
+
+            // Fallback for when speaker_labels aren't generated (short audio or single speaker sometimes)
+            if (segments.length === 0 && result.text) {
+                segments.push({
+                    start: 0,
+                    end: result.audio_duration || 0,
+                    speaker: 'Speaker',
+                    text: result.text
+                });
+            }
+
+            return {
+                text: result.text,
+                segments: segments,
+                providerUsed: TranscriptionProvider.ASSEMBLYAI,
+                detectedLanguage: result.language_code
+            };
+        } else if (result.status === 'error') {
+            throw new Error(`AssemblyAI Processing Failed: ${result.error}`);
+        } else {
+            // Processing...
+            // Fake progress from 30% to 90%
+            if (onProgress) {
+                const fakeProgress = 30 + Math.min(60, pollingAttempt * 2); 
+                onProgress(fakeProgress);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+    }
 };
 
 // --- MAIN EXPORT ---
 export const transcribeAudio = async (
   file: File | Blob,
-  base64: string,
+  base64: string, // Unused here, kept for interface compatibility if needed, but logic uses file directly
   settings: TranscriptionSettings,
   onProgress?: (percent: number) => void
 ): Promise<TranscriptionResult> => {
-  const requireKey = (key: string | undefined, label: string) => {
-    if (!key || key.trim().length === 0) {
-      throw new Error(`${label} API key is missing. Open Settings and add it first.`);
-    }
-    return key.trim();
-  };
-
   switch (settings.provider) {
     case TranscriptionProvider.OPENAI:
-      return await transcribeWithOpenAI(file, requireKey(settings.openaiKey, 'OpenAI'), settings);
+      return await transcribeWithOpenAI(file, settings.openaiKey, settings);
     case TranscriptionProvider.ASSEMBLYAI:
-      return await transcribeWithAssemblyAI(file, requireKey(settings.assemblyAiKey, 'AssemblyAI'), settings, onProgress);
+      return await transcribeWithAssemblyAI(file, settings.assemblyAiKey, settings, onProgress);
     case TranscriptionProvider.GEMINI:
     default:
       return await transcribeWithGemini(file, settings, onProgress);
