@@ -4,9 +4,7 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-ENV NODE_ENV=production
-
-# Install dependencies
+# Install dependencies (including devDependencies needed for build)
 COPY package*.json ./
 RUN npm install
 
@@ -21,6 +19,8 @@ RUN npm run build
 
 # Production stage
 FROM nginx:1.27-alpine
+
+ENV NODE_ENV=production
 
 # Copy custom nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
