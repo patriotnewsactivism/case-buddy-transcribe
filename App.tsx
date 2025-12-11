@@ -8,7 +8,7 @@ import SettingsDialog from './components/SettingsDialog';
 import { AppMode, TranscriptionStatus, TranscriptionProvider, TranscriptionSettings, BatchItem } from './types';
 import { transcribeAudio } from './services/transcriptionService';
 import { processMediaFile } from './utils/audioUtils';
-import { downloadFile, generateFilename } from './utils/fileUtils';
+import { downloadFile, generateFilename, formatTranscriptWithSpeakers } from './utils/fileUtils';
 import { openDrivePicker, uploadToDrive } from './services/driveService';
 import { ArrowLeft } from 'lucide-react';
 
@@ -33,6 +33,7 @@ const App: React.FC = () => {
   const [queue, setQueue] = useState<BatchItem[]>([]);
   const [viewingItemId, setViewingItemId] = useState<string | null>(null);
   const isProcessingRef = useRef(false);
+  const [processCounter, setProcessCounter] = useState(0); // Trigger to force queue re-evaluation
 
   // Drive State
   const [driveLoadingState, setDriveLoadingState] = useState<string | null>(null);
@@ -153,12 +154,17 @@ const App: React.FC = () => {
             // 3. AUTO-SAVE TO DRIVE
             if (settings.autoDriveUpload && settings.googleClientId) {
                  try {
+                    // Format transcript with speakers and timestamps for Drive upload
+                    const formattedTranscript = result.segments && result.segments.length > 0
+                        ? formatTranscriptWithSpeakers(result.segments)
+                        : result.text;
+
                     // Upload Transcript
                     await uploadToDrive(
                         settings.googleClientId,
-                        "GeminiWhisper", 
+                        "GeminiWhisper",
                         `Transcript_${nextItem.file.name}.txt`,
-                        result.text,
+                        formattedTranscript,
                         "text/plain"
                     );
                     
@@ -180,11 +186,13 @@ const App: React.FC = () => {
             updateItem(itemId, { status: 'ERROR', error: error.message || 'Processing Failed' });
         } finally {
             isProcessingRef.current = false;
+            // Force re-evaluation of queue to process next item
+            setProcessCounter(c => c + 1);
         }
     };
 
     processNext();
-  }, [queue, settings]);
+  }, [queue, settings, processCounter]);
 
   // --- HANDLERS ---
 
@@ -193,7 +201,11 @@ const App: React.FC = () => {
       if (completed.length === 0) return;
 
       const combinedText = completed.map(i => {
-          return `--- FILE: ${i.file.name} ---\n\n${i.result?.text}\n\n`;
+          // Use formatted transcript with speakers if segments are available
+          const transcriptText = i.result?.segments && i.result.segments.length > 0
+              ? formatTranscriptWithSpeakers(i.result.segments)
+              : i.result?.text || '';
+          return `--- FILE: ${i.file.name} ---\n\n${transcriptText}\n\n`;
       }).join('\n========================================\n\n');
 
       downloadFile(combinedText, generateFilename('All_Transcripts', 'txt'), 'text/plain');
