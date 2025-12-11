@@ -4,31 +4,34 @@ import { fileToBase64 } from "../utils/audioUtils";
 
 /**
  * Polls the Gemini File API until the uploaded file is in the 'ACTIVE' state.
+ * Uses exponential backoff starting at 500ms for faster initial checks.
  */
 const waitForFileActive = async (fileUri: string, apiKey: string): Promise<void> => {
     const fileId = fileUri.split('/').pop();
     if (!fileId) return;
 
-    const maxAttempts = 120; // Wait up to 4 minutes for very large files
+    const maxAttempts = 60; // Reduced attempts since we use backoff
     let attempt = 0;
+    let delay = 500; // Start with 500ms for quick initial checks
 
     while (attempt < maxAttempts) {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/files/${fileId}?key=${apiKey}`);
         if (!response.ok) throw new Error("Failed to check file status");
-        
+
         const data = await response.json();
-        
+
         if (data.state === 'ACTIVE') {
             return;
         } else if (data.state === 'FAILED') {
             throw new Error("File processing failed on Google servers.");
         }
 
-        // Wait 2 seconds before next poll
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Exponential backoff: 500ms -> 1s -> 2s -> 3s (capped)
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay = Math.min(delay * 1.5, 3000); // Cap at 3 seconds
         attempt++;
     }
-    
+
     throw new Error("File processing timed out. The file might be too large or the service is busy.");
 };
 
