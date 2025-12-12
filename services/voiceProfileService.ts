@@ -14,6 +14,7 @@ export interface VoiceProfile {
 }
 
 const STORAGE_KEY = 'voice_profiles';
+const SPEAKER_MAP_KEY = 'speaker_name_map';
 
 /**
  * Get all saved voice profiles
@@ -98,6 +99,33 @@ export const recordSpeakerUsage = (speakerMap: Record<string, string>): void => 
       saveVoiceProfile(name.trim());
     }
   });
+};
+
+/**
+ * Persist speaker name overrides so common mappings are reused.
+ */
+export const persistSpeakerMap = (speakerMap: Record<string, string>): void => {
+  try {
+    const existingRaw = localStorage.getItem(SPEAKER_MAP_KEY);
+    const existing = existingRaw ? JSON.parse(existingRaw) as Record<string, string> : {};
+    const merged = { ...existing, ...speakerMap };
+    localStorage.setItem(SPEAKER_MAP_KEY, JSON.stringify(merged));
+  } catch (e) {
+    console.error('Failed to persist speaker map', e);
+  }
+};
+
+/**
+ * Load previously saved speaker overrides.
+ */
+export const getSavedSpeakerMap = (): Record<string, string> => {
+  try {
+    const stored = localStorage.getItem(SPEAKER_MAP_KEY);
+    return stored ? JSON.parse(stored) as Record<string, string> : {};
+  } catch (e) {
+    console.error('Failed to load speaker map', e);
+    return {};
+  }
 };
 
 /**
