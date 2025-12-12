@@ -139,35 +139,48 @@ export const formatTranscriptWithSpeakers = (
   if (!segments || segments.length === 0) return '';
 
   const getSpeakerName = (speaker: string) => speakerMap[speaker] || speaker;
+  const sortedSegments = [...segments].sort((a, b) => a.start - b.start);
+  const withCanonicalSpeakers = sortedSegments.map((seg) => ({
+    ...seg,
+    speaker: getSpeakerName(seg.speaker),
+  }));
 
   if (groupBySpeaker) {
     // Group consecutive segments by the same speaker
-    const grouped: Array<{ speaker: string; start: number; end: number; texts: string[] }> = [];
+    const grouped: Array<{ speaker: string; start: number; end: number; texts: string[]; starts: number[] }> = [];
 
-    segments.forEach((seg) => {
+    withCanonicalSpeakers.forEach((seg) => {
       const lastGroup = grouped[grouped.length - 1];
       if (lastGroup && lastGroup.speaker === seg.speaker) {
         lastGroup.texts.push(seg.text);
         lastGroup.end = seg.end;
+        lastGroup.starts.push(seg.start);
       } else {
         grouped.push({
           speaker: seg.speaker,
           start: seg.start,
           end: seg.end,
-          texts: [seg.text]
+          texts: [seg.text],
+          starts: [seg.start],
         });
       }
     });
 
     return grouped.map(group => {
-      const speakerName = getSpeakerName(group.speaker);
       const timestamp = includeTimestamps ? `[${formatTimestamp(group.start)}] ` : '';
-      return `${timestamp}${speakerName}:\n${group.texts.join(' ')}\n`;
+      const timedLines = group.texts
+        .map((text, idx) => {
+          const lineTimestamp = includeTimestamps ? `[${formatTimestamp(group.starts[idx])}] ` : '';
+          return `${lineTimestamp}${text}`;
+        })
+        .join('\n');
+
+      return `${timestamp}${group.speaker}:\n${timedLines}\n`;
     }).join('\n');
   } else {
     // Standard format: each segment on its own line
-    return segments.map(seg => {
-      const speakerName = getSpeakerName(seg.speaker);
+    return withCanonicalSpeakers.map(seg => {
+      const speakerName = seg.speaker;
       const timestamp = includeTimestamps ? `[${formatTimestamp(seg.start)}] ` : '';
       return `${timestamp}${speakerName}: ${seg.text}`;
     }).join('\n');

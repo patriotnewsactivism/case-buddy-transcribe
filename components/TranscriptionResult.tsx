@@ -3,7 +3,7 @@ import { Copy, Check, FileText, Wand2, Languages, Users, Download, Printer, Chev
 import { summarizeText, translateText } from '../services/geminiService';
 import { downloadFile, generateFilename, printLegalDocument, formatTranscriptWithSpeakers, extractDateFromFilename, getFileMetadata } from '../utils/fileUtils';
 import { TranscriptSegment, TranscriptionResult as TranscriptionResultType, TranscriptionProvider } from '../types';
-import { getSpeakerSuggestions, saveVoiceProfile, getRecentSpeakers, recordSpeakerUsage } from '../services/voiceProfileService';
+import { getSpeakerSuggestions, saveVoiceProfile, getRecentSpeakers, recordSpeakerUsage, persistSpeakerMap, getSavedSpeakerMap } from '../services/voiceProfileService';
 
 interface TranscriptionResultProps {
   result: TranscriptionResultType;
@@ -40,6 +40,11 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
   const [showSpeakerPanel, setShowSpeakerPanel] = useState(false);
   const [speakerSuggestions, setSpeakerSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [segmentEditingIndex, setSegmentEditingIndex] = useState<number | null>(null);
+  const [segmentSpeakerInput, setSegmentSpeakerInput] = useState('');
+  const [segmentOriginalSpeaker, setSegmentOriginalSpeaker] = useState<string | null>(null);
+  const [segmentTextEditingIndex, setSegmentTextEditingIndex] = useState<number | null>(null);
+  const [segmentTextInput, setSegmentTextInput] = useState('');
 
   // File Metadata
   const [fileDate, setFileDate] = useState<{ date: string | null; time: string | null } | null>(null);
@@ -47,6 +52,15 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
 
   const menuRef = useRef<HTMLDivElement>(null);
   const speakerPanelRef = useRef<HTMLDivElement>(null);
+  const speakerMapInitialized = useRef(false);
+
+  // Get display name for a speaker (mapped or original)
+  const getSpeakerDisplayName = (originalSpeaker: string): string => {
+      return speakerMap[originalSpeaker] || originalSpeaker;
+  };
+
+  const rawSpeakers = [...new Set(segments.map(s => s.speaker))];
+  const uniqueSpeakers = [...new Set(segments.map(s => getSpeakerDisplayName(s.speaker)))];
 
   // Initialize Audio URL and extract metadata
   useEffect(() => {
@@ -79,6 +93,13 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
     setSegments(result.segments || []);
     setSummary(null);
     setTranslation(null);
+    setSpeakerMap({});
+    speakerMapInitialized.current = false;
+    setSegmentEditingIndex(null);
+    setSegmentSpeakerInput('');
+    setSegmentOriginalSpeaker(null);
+    setSegmentTextEditingIndex(null);
+    setSegmentTextInput('');
   }, [result]);
 
   // Close menu on outside click
@@ -101,44 +122,75 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
       return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showSpeakerPanel, speakerMap]);
 
-  // Get unique speakers from segments
-  const uniqueSpeakers = [...new Set(segments.map(s => s.speaker))];
+  // Load any saved speaker mappings for known labels
+  useEffect(() => {
+      if (speakerMapInitialized.current) return;
+      if (segments.length === 0) return;
 
-  // Get display name for a speaker (mapped or original)
-  const getSpeakerDisplayName = (originalSpeaker: string): string => {
-      return speakerMap[originalSpeaker] || originalSpeaker;
-  };
+      const saved = getSavedSpeakerMap();
+      const applicable: Record<string, string> = {};
+      segments.forEach(seg => {
+          if (saved[seg.speaker]) {
+              applicable[seg.speaker] = saved[seg.speaker];
+          }
+      });
+
+      if (Object.keys(applicable).length > 0) {
+          setSpeakerMap(applicable);
+      }
+
+      speakerMapInitialized.current = true;
+  }, [segments]);
 
   // Update speaker name mapping and save to voice profiles
   const handleSpeakerRename = (originalSpeaker: string, newName: string) => {
       if (newName.trim()) {
-          setSpeakerMap(prev => ({ ...prev, [originalSpeaker]: newName.trim() }));
+          const cleaned = newName.trim();
+          setSpeakerMap(prev => {
+              const updated = { ...prev, [originalSpeaker]: cleaned };
+              persistSpeakerMap({ [originalSpeaker]: cleaned });
+              return updated;
+          });
           // Save to voice profiles for future suggestions
-          saveVoiceProfile(newName.trim());
+          saveVoiceProfile(cleaned);
+          recordSpeakerUsage({ [originalSpeaker]: cleaned });
       }
       setEditingSpeaker(null);
       setNewSpeakerName('');
       setShowSuggestions(false);
   };
 
-  // Handle speaker name input change and fetch suggestions
-  const handleSpeakerInputChange = (value: string) => {
-      setNewSpeakerName(value);
+  // Centralized suggestion lookup to share between inputs
+  const refreshSuggestions = (value: string) => {
       if (value.trim()) {
           const suggestions = getSpeakerSuggestions(value);
           setSpeakerSuggestions(suggestions);
           setShowSuggestions(suggestions.length > 0);
       } else {
-          // Show recent speakers when input is empty
           const recent = getRecentSpeakers(5);
           setSpeakerSuggestions(recent);
           setShowSuggestions(recent.length > 0);
       }
   };
 
+  // Handle speaker name input change and fetch suggestions
+  const handleSpeakerInputChange = (value: string) => {
+      setNewSpeakerName(value);
+      refreshSuggestions(value);
+  };
+
+  const handleSegmentSpeakerInputChange = (value: string) => {
+      setSegmentSpeakerInput(value);
+      refreshSuggestions(value);
+  };
+
   // Select a suggestion
   const handleSelectSuggestion = (suggestion: string) => {
-      setNewSpeakerName(suggestion);
+      if (segmentEditingIndex !== null) {
+          setSegmentSpeakerInput(suggestion);
+      } else {
+          setNewSpeakerName(suggestion);
+      }
       setShowSuggestions(false);
   };
 
@@ -149,7 +201,78 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
       // Record all current speaker mappings for learning
       if (Object.keys(speakerMap).length > 0) {
           recordSpeakerUsage(speakerMap);
+          persistSpeakerMap(speakerMap);
       }
+  };
+
+  const startSegmentSpeakerEdit = (index: number) => {
+      const target = segments[index];
+      if (!target) return;
+      setSegmentEditingIndex(index);
+      const displayName = getSpeakerDisplayName(target.speaker);
+      setSegmentSpeakerInput(displayName);
+      setSegmentOriginalSpeaker(target.speaker);
+      refreshSuggestions(displayName);
+  };
+
+  const cancelSegmentSpeakerEdit = () => {
+      setSegmentEditingIndex(null);
+      setSegmentSpeakerInput('');
+      setSegmentOriginalSpeaker(null);
+      setShowSuggestions(false);
+  };
+
+  const startSegmentTextEdit = (index: number) => {
+      const target = segments[index];
+      if (!target) return;
+      setSegmentTextEditingIndex(index);
+      setSegmentTextInput(target.text);
+  };
+
+  const cancelSegmentTextEdit = () => {
+      setSegmentTextEditingIndex(null);
+      setSegmentTextInput('');
+  };
+
+  const saveSegmentTextEdit = () => {
+      if (segmentTextEditingIndex === null) return;
+      const updatedText = segmentTextInput.trim();
+      if (!updatedText) {
+          cancelSegmentTextEdit();
+          return;
+      }
+
+      setSegments(prev => prev.map((seg, idx) => idx === segmentTextEditingIndex ? { ...seg, text: updatedText } : seg));
+      cancelSegmentTextEdit();
+  };
+
+  const saveSegmentSpeakerEdit = () => {
+      if (segmentEditingIndex === null) return;
+
+      const target = segments[segmentEditingIndex];
+      if (!target) {
+          cancelSegmentSpeakerEdit();
+          return;
+      }
+
+      const cleaned = segmentSpeakerInput.trim();
+      if (!cleaned) {
+          cancelSegmentSpeakerEdit();
+          return;
+      }
+
+      const originalLabel = segmentOriginalSpeaker ?? target.speaker;
+
+      setSegments(prev => prev.map((seg, idx) => idx === segmentEditingIndex ? { ...seg, speaker: cleaned } : seg));
+      setSpeakerMap(prev => {
+          const updated = { ...prev, [originalLabel]: cleaned };
+          persistSpeakerMap({ [originalLabel]: cleaned });
+          return updated;
+      });
+
+      saveVoiceProfile(cleaned);
+      recordSpeakerUsage({ [originalLabel]: cleaned });
+      cancelSegmentSpeakerEdit();
   };
 
   // Update displayText whenever speakerMap changes
@@ -369,7 +492,7 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
             )}
 
            {/* Speaker Management */}
-           {uniqueSpeakers.length > 0 && (
+          {rawSpeakers.length > 0 && (
                <div className="relative" ref={speakerPanelRef}>
                    <button
                        onClick={() => showSpeakerPanel ? handleCloseSpeakerPanel() : setShowSpeakerPanel(true)}
@@ -386,7 +509,7 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
                            <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Edit Speaker Names</h3>
                            <p className="text-[10px] text-zinc-600 mb-3">Names you assign are remembered for future transcriptions.</p>
                            <div className="space-y-2">
-                               {uniqueSpeakers.map(speaker => (
+                               {rawSpeakers.map(speaker => (
                                    <div key={speaker} className="relative">
                                        {editingSpeaker === speaker ? (
                                            <div className="relative">
@@ -483,6 +606,16 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
                         Text File (with speakers)
                      </button>
                      <button
+                        onClick={() => {
+                            if (segments.length === 0) return;
+                            const grouped = formatTranscriptWithSpeakers(segments, speakerMap, { includeTimestamps: true, groupBySpeaker: true });
+                            downloadFile(grouped, generateFilename('Speaker_Separated', 'txt'), 'text/plain');
+                        }}
+                        className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+                     >
+                        Speaker-separated (grouped)
+                     </button>
+                     <button
                         onClick={() => printLegalDocument(
                             displayText,
                             "TRANSCRIPT OF RECORDING",
@@ -572,16 +705,97 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
                                     `}
                                   >
                                       <div className="flex items-baseline gap-3 mb-1">
-                                          <span className={`text-[10px] font-bold uppercase tracking-wider ${idx === activeSegmentIndex ? 'text-indigo-400' : 'text-zinc-500'}`}>
-                                              {getSpeakerDisplayName(seg.speaker) || `Speaker`}
-                                          </span>
+                                          <div className="flex items-center gap-2">
+                                              <span className={`text-[10px] font-bold uppercase tracking-wider ${idx === activeSegmentIndex ? 'text-indigo-400' : 'text-zinc-500'}`}>
+                                                  {getSpeakerDisplayName(seg.speaker) || `Speaker`}
+                                              </span>
+                                              <button
+                                                  onClick={(e) => { e.stopPropagation(); startSegmentSpeakerEdit(idx); }}
+                                                  className="text-[10px] text-zinc-500 hover:text-white bg-zinc-800/70 border border-zinc-700 px-2 py-0.5 rounded-full"
+                                              >
+                                                  Edit
+                                              </button>
+                                              <button
+                                                  onClick={(e) => { e.stopPropagation(); startSegmentTextEdit(idx); }}
+                                                  className="text-[10px] text-zinc-500 hover:text-white bg-zinc-800/70 border border-zinc-700 px-2 py-0.5 rounded-full"
+                                              >
+                                                  Edit text
+                                              </button>
+                                          </div>
                                           <span className="text-[10px] font-mono text-zinc-600">
                                               {formatTimestamp(seg.start)}
                                           </span>
                                       </div>
-                                      <p className={`text-base leading-relaxed ${idx === activeSegmentIndex ? 'text-white' : 'text-zinc-300 group-hover:text-zinc-200'}`}>
-                                          {renderClickableText(seg.text, seg.start, seg.end)}
-                                      </p>
+                                      {segmentEditingIndex === idx ? (
+                                          <div className="relative mt-2" onClick={(e) => e.stopPropagation()}>
+                                              <div className="flex items-center gap-2">
+                                                  <input
+                                                      type="text"
+                                                      value={segmentSpeakerInput}
+                                                      onChange={(e) => handleSegmentSpeakerInputChange(e.target.value)}
+                                                      onFocus={(e) => refreshSuggestions(e.target.value)}
+                                                      onKeyDown={(e) => {
+                                                          if (e.key === 'Enter') saveSegmentSpeakerEdit();
+                                                          if (e.key === 'Escape') cancelSegmentSpeakerEdit();
+                                                      }}
+                                                      className="w-48 px-2 py-1 text-sm bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                                                      placeholder="Assign speaker"
+                                                      autoFocus
+                                                  />
+                                                  <button
+                                                      onClick={saveSegmentSpeakerEdit}
+                                                      className="px-2 py-1 text-[11px] bg-blue-600 text-white rounded-lg hover:bg-blue-500"
+                                                  >
+                                                      Save
+                                                  </button>
+                                                  <button
+                                                      onClick={cancelSegmentSpeakerEdit}
+                                                      className="px-2 py-1 text-[11px] bg-zinc-800 text-zinc-300 rounded-lg border border-zinc-700 hover:bg-zinc-700"
+                                                  >
+                                                      Cancel
+                                                  </button>
+                                              </div>
+                                              {showSuggestions && speakerSuggestions.length > 0 && (
+                                                  <div className="absolute z-50 mt-2 w-64 bg-zinc-900 border border-zinc-800 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                                                      {speakerSuggestions.map((suggestion, sIdx) => (
+                                                          <button
+                                                              key={sIdx}
+                                                              onClick={() => handleSelectSuggestion(suggestion)}
+                                                              className="w-full text-left px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800"
+                                                          >
+                                                              {suggestion}
+                                                          </button>
+                                                      ))}
+                                                  </div>
+                                              )}
+                                          </div>
+                                      ) : segmentTextEditingIndex === idx ? (
+                                          <div className="relative mt-3" onClick={(e) => e.stopPropagation()}>
+                                              <textarea
+                                                  value={segmentTextInput}
+                                                  onChange={(e) => setSegmentTextInput(e.target.value)}
+                                                  className="w-full min-h-[100px] px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                                              />
+                                              <div className="flex items-center gap-2 mt-2">
+                                                  <button
+                                                      onClick={saveSegmentTextEdit}
+                                                      className="px-3 py-1 text-[11px] bg-blue-600 text-white rounded-lg hover:bg-blue-500"
+                                                  >
+                                                      Save text
+                                                  </button>
+                                                  <button
+                                                      onClick={cancelSegmentTextEdit}
+                                                      className="px-3 py-1 text-[11px] bg-zinc-800 text-zinc-300 rounded-lg border border-zinc-700 hover:bg-zinc-700"
+                                                  >
+                                                      Cancel
+                                                  </button>
+                                              </div>
+                                          </div>
+                                      ) : (
+                                          <p className={`text-base leading-relaxed ${idx === activeSegmentIndex ? 'text-white' : 'text-zinc-300 group-hover:text-zinc-200'}`}>
+                                              {renderClickableText(seg.text, seg.start, seg.end)}
+                                          </p>
+                                      )}
                                   </div>
                               ))
                           ) : (
