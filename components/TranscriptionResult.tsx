@@ -43,6 +43,8 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
   const [segmentEditingIndex, setSegmentEditingIndex] = useState<number | null>(null);
   const [segmentSpeakerInput, setSegmentSpeakerInput] = useState('');
   const [segmentOriginalSpeaker, setSegmentOriginalSpeaker] = useState<string | null>(null);
+  const [segmentTextEditingIndex, setSegmentTextEditingIndex] = useState<number | null>(null);
+  const [segmentTextInput, setSegmentTextInput] = useState('');
 
   // File Metadata
   const [fileDate, setFileDate] = useState<{ date: string | null; time: string | null } | null>(null);
@@ -51,6 +53,14 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
   const menuRef = useRef<HTMLDivElement>(null);
   const speakerPanelRef = useRef<HTMLDivElement>(null);
   const speakerMapInitialized = useRef(false);
+
+  // Get display name for a speaker (mapped or original)
+  const getSpeakerDisplayName = (originalSpeaker: string): string => {
+      return speakerMap[originalSpeaker] || originalSpeaker;
+  };
+
+  const rawSpeakers = [...new Set(segments.map(s => s.speaker))];
+  const uniqueSpeakers = [...new Set(segments.map(s => getSpeakerDisplayName(s.speaker)))];
 
   // Initialize Audio URL and extract metadata
   useEffect(() => {
@@ -88,6 +98,8 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
     setSegmentEditingIndex(null);
     setSegmentSpeakerInput('');
     setSegmentOriginalSpeaker(null);
+    setSegmentTextEditingIndex(null);
+    setSegmentTextInput('');
   }, [result]);
 
   // Close menu on outside click
@@ -129,15 +141,6 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
 
       speakerMapInitialized.current = true;
   }, [segments]);
-
-  // Track original and display speaker labels separately
-  const rawSpeakers = [...new Set(segments.map(s => s.speaker))];
-  const uniqueSpeakers = [...new Set(segments.map(s => getSpeakerDisplayName(s.speaker)))];
-
-  // Get display name for a speaker (mapped or original)
-  const getSpeakerDisplayName = (originalSpeaker: string): string => {
-      return speakerMap[originalSpeaker] || originalSpeaker;
-  };
 
   // Update speaker name mapping and save to voice profiles
   const handleSpeakerRename = (originalSpeaker: string, newName: string) => {
@@ -217,6 +220,30 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
       setSegmentSpeakerInput('');
       setSegmentOriginalSpeaker(null);
       setShowSuggestions(false);
+  };
+
+  const startSegmentTextEdit = (index: number) => {
+      const target = segments[index];
+      if (!target) return;
+      setSegmentTextEditingIndex(index);
+      setSegmentTextInput(target.text);
+  };
+
+  const cancelSegmentTextEdit = () => {
+      setSegmentTextEditingIndex(null);
+      setSegmentTextInput('');
+  };
+
+  const saveSegmentTextEdit = () => {
+      if (segmentTextEditingIndex === null) return;
+      const updatedText = segmentTextInput.trim();
+      if (!updatedText) {
+          cancelSegmentTextEdit();
+          return;
+      }
+
+      setSegments(prev => prev.map((seg, idx) => idx === segmentTextEditingIndex ? { ...seg, text: updatedText } : seg));
+      cancelSegmentTextEdit();
   };
 
   const saveSegmentSpeakerEdit = () => {
@@ -688,6 +715,12 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
                                               >
                                                   Edit
                                               </button>
+                                              <button
+                                                  onClick={(e) => { e.stopPropagation(); startSegmentTextEdit(idx); }}
+                                                  className="text-[10px] text-zinc-500 hover:text-white bg-zinc-800/70 border border-zinc-700 px-2 py-0.5 rounded-full"
+                                              >
+                                                  Edit text
+                                              </button>
                                           </div>
                                           <span className="text-[10px] font-mono text-zinc-600">
                                               {formatTimestamp(seg.start)}
@@ -735,6 +768,28 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({ result, audio
                                                       ))}
                                                   </div>
                                               )}
+                                          </div>
+                                      ) : segmentTextEditingIndex === idx ? (
+                                          <div className="relative mt-3" onClick={(e) => e.stopPropagation()}>
+                                              <textarea
+                                                  value={segmentTextInput}
+                                                  onChange={(e) => setSegmentTextInput(e.target.value)}
+                                                  className="w-full min-h-[100px] px-3 py-2 text-sm bg-zinc-900 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                                              />
+                                              <div className="flex items-center gap-2 mt-2">
+                                                  <button
+                                                      onClick={saveSegmentTextEdit}
+                                                      className="px-3 py-1 text-[11px] bg-blue-600 text-white rounded-lg hover:bg-blue-500"
+                                                  >
+                                                      Save text
+                                                  </button>
+                                                  <button
+                                                      onClick={cancelSegmentTextEdit}
+                                                      className="px-3 py-1 text-[11px] bg-zinc-800 text-zinc-300 rounded-lg border border-zinc-700 hover:bg-zinc-700"
+                                                  >
+                                                      Cancel
+                                                  </button>
+                                              </div>
                                           </div>
                                       ) : (
                                           <p className={`text-base leading-relaxed ${idx === activeSegmentIndex ? 'text-white' : 'text-zinc-300 group-hover:text-zinc-200'}`}>
