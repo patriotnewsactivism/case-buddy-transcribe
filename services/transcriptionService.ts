@@ -1,6 +1,5 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { TranscriptionProvider, TranscriptionSettings, TranscriptionResult, TranscriptSegment } from "../types";
-import { fileToBase64 } from "../utils/audioUtils";
 
 /**
  * Polls the Gemini File API until the uploaded file is in the 'ACTIVE' state.
@@ -35,6 +34,70 @@ const waitForFileActive = async (fileUri: string, apiKey: string): Promise<void>
     throw new Error("File processing timed out. The file might be too large or the service is busy.");
 };
 
+/**
+ * Uploads any file to Gemini's File API using the resumable upload flow so we
+ * avoid base64 bloating and always get progress callbacks. This greatly reduces
+ * bandwidth usage on slow connections and prevents the UI from stalling at 15%.
+ */
+const uploadFileToGemini = async (
+    file: Blob | File,
+    apiKey: string,
+    onProgress?: (percent: number) => void
+): Promise<string> => {
+    const startResponse = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`, {
+        method: 'POST',
+        headers: {
+            'X-Goog-Upload-Protocol': 'resumable',
+            'X-Goog-Upload-Command': 'start',
+            'X-Goog-Upload-Header-Content-Length': file.size.toString(),
+            'X-Goog-Upload-Header-Content-Type': file.type || 'audio/wav',
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ file: { display_name: file instanceof File ? file.name : 'Audio_Evidence' } })
+    });
+
+    if (!startResponse.ok) {
+        const errorText = await startResponse.text().catch(() => '');
+        throw new Error(`Failed to start upload: ${startResponse.status} ${errorText}`);
+    }
+
+    const uploadUrl = startResponse.headers.get('X-Goog-Upload-URL');
+    if (!uploadUrl) throw new Error("Failed to initiate Gemini upload session.");
+
+    return await new Promise<string>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', uploadUrl);
+        xhr.setRequestHeader('Content-Length', file.size.toString());
+        xhr.setRequestHeader('X-Goog-Upload-Offset', '0');
+        xhr.setRequestHeader('X-Goog-Upload-Command', 'upload, finalize');
+
+        if (onProgress) {
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    onProgress(percent);
+                }
+            };
+        }
+
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try {
+                    const fileData = JSON.parse(xhr.responseText);
+                    resolve(fileData.file.uri);
+                } catch (err) {
+                    reject(new Error("Failed to parse upload response"));
+                }
+            } else {
+                reject(new Error(`Upload failed with status ${xhr.status}`));
+            }
+        };
+
+        xhr.onerror = () => reject(new Error("Network Error during upload"));
+        xhr.send(file);
+    });
+};
+
 // --- GEMINI IMPLEMENTATION ---
 const transcribeWithGemini = async (
   file: Blob | File,
@@ -48,7 +111,7 @@ const transcribeWithGemini = async (
   const modelName = 'gemini-2.5-flash'; // 2.5 Flash is best for structured JSON output + speed
 
   // Build Vocabulary String
-  const vocabList = settings.customVocabulary.length > 0 
+  const vocabList = settings.customVocabulary.length > 0
     ? `VOCABULARY/GLOSSARY (Prioritize these spellings): ${settings.customVocabulary.join(', ')}`
     : '';
 
@@ -58,9 +121,9 @@ const transcribeWithGemini = async (
   ${vocabList}
 
   TASK:
-  Transcribe the audio accurately. 
+  Transcribe the audio accurately.
   You MUST return the result as a raw JSON Array of objects. Do not use Markdown code blocks. Just the JSON.
-  
+
   SCHEMA:
   Array<{
     start: number; // Start time in seconds (e.g., 12.5)
@@ -75,14 +138,14 @@ const transcribeWithGemini = async (
   3. Identify speakers carefully.
   4. ACCURACY: If you see specific words in the provided Vocabulary list, use them.
   `;
-  
+
   // --- HELPER: Parse JSON Response ---
   const parseGeminiResponse = (text: string): TranscriptionResult => {
       try {
           // Clean potential markdown blocks if the model ignores instructions
           const cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
           const segments: TranscriptSegment[] = JSON.parse(cleanedText);
-          
+
           // Reconstruct full text for fallback/export
           const fullText = segments.map(s => `[${formatTimestamp(s.start)}] [${s.speaker}] ${s.text}`).join('\n');
 
@@ -106,110 +169,65 @@ const transcribeWithGemini = async (
       return `${min}:${sec.toString().padStart(2, '0')}`;
   };
 
-  // --- LARGE FILE HANDLING (File API) ---
-  const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024; // 10 MB
+  try {
+      if (onProgress) onProgress(1); // Start progress indication immediately
 
-  let rawResponseText = "";
+      // 1. Upload via File API (works for all sizes and keeps bandwidth lower than base64)
+      const fileUri = await uploadFileToGemini(file, API_KEY, onProgress);
 
-  if (file.size > LARGE_FILE_THRESHOLD) {
-    try {
-        if (onProgress) onProgress(1); // Start progress indication
+      if (onProgress) onProgress(100);
 
-        // 1. Initiate Resumable Upload
-        const uploadResponse = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${API_KEY}`, {
-            method: 'POST',
-            headers: {
-                'X-Goog-Upload-Protocol': 'resumable',
-                'X-Goog-Upload-Command': 'start',
-                'X-Goog-Upload-Header-Content-Length': file.size.toString(),
-                'X-Goog-Upload-Header-Content-Type': file.type || 'audio/wav',
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ file: { display_name: 'Audio_Evidence' } })
-        });
+      // 2. Wait for processing server-side
+      await waitForFileActive(fileUri, API_KEY);
 
-        const uploadUrl = uploadResponse.headers.get('X-Goog-Upload-URL');
-        if (!uploadUrl) throw new Error("Failed to initiate large file upload.");
-
-        // 2. Upload Bytes
-        const fileUri = await new Promise<string>((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', uploadUrl);
-            xhr.setRequestHeader('Content-Length', file.size.toString());
-            xhr.setRequestHeader('X-Goog-Upload-Offset', '0');
-            xhr.setRequestHeader('X-Goog-Upload-Command', 'upload, finalize');
-
-            xhr.upload.onprogress = (e) => {
-                if (e.lengthComputable && onProgress) {
-                    const percent = Math.round((e.loaded / e.total) * 100);
-                    onProgress(percent);
-                }
-            };
-
-            xhr.onload = () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    try {
-                        const fileData = JSON.parse(xhr.responseText);
-                        resolve(fileData.file.uri);
-                    } catch (err) {
-                        reject(new Error("Failed to parse upload response"));
-                    }
-                } else {
-                    reject(new Error(`Upload failed with status ${xhr.status}`));
-                }
-            };
-
-            xhr.onerror = () => reject(new Error("Network Error during upload"));
-            xhr.send(file);
-        });
-
-        if (onProgress) onProgress(100);
-
-        // 3. Wait for file active
-        await waitForFileActive(fileUri, API_KEY);
-
-        // 4. Generate
-        const response: GenerateContentResponse = await ai.models.generateContent({
-            model: modelName,
-            contents: {
-                parts: [
-                    { fileData: { fileUri: fileUri, mimeType: file.type || 'audio/wav' } },
-                    { text: prompt }
-                ]
-            },
-            config: {
-                responseMimeType: "application/json" // Force JSON output
-            }
-        });
-        rawResponseText = response.text || "[]";
-
-    } catch (e) {
-        console.error("Large file upload failed:", e);
-        throw new Error("File processing failed. Please try a shorter clip or check your connection.");
-    }
-  } 
-  
-  // --- STANDARD SMALL FILE HANDLING ---
-  else {
-      const base64Audio = await fileToBase64(file);
-      const mimeType = file.type || 'audio/webm';
-      
+      // 3. Generate structured transcript
       const response: GenerateContentResponse = await ai.models.generateContent({
-        model: modelName,
-        contents: {
-          parts: [
-            { inlineData: { mimeType: mimeType, data: base64Audio } },
-            { text: prompt }
-          ]
-        },
-        config: {
-            responseMimeType: "application/json"
-        }
+          model: modelName,
+          contents: {
+              parts: [
+                  { fileData: { fileUri: fileUri, mimeType: file.type || 'audio/wav' } },
+                  { text: prompt }
+              ]
+          },
+          config: {
+              responseMimeType: "application/json" // Force JSON output
+          }
       });
-      rawResponseText = response.text || "[]";
-  }
 
-  return parseGeminiResponse(rawResponseText);
+      const rawResponseText = response.text || "[]";
+      return parseGeminiResponse(rawResponseText);
+
+  } catch (e) {
+      console.error("Gemini transcription failed:", e);
+
+      // Last-resort fallback for very small files if the upload flow fails (keeps app functional offline/CDN blocks)
+      if (file.size < 2 * 1024 * 1024) {
+          try {
+              const base64Audio = await file.arrayBuffer().then((buf) => btoa(String.fromCharCode(...new Uint8Array(buf))));
+              const mimeType = file.type || 'audio/webm';
+
+              const response: GenerateContentResponse = await ai.models.generateContent({
+                  model: modelName,
+                  contents: {
+                      parts: [
+                          { inlineData: { mimeType: mimeType, data: base64Audio } },
+                          { text: prompt }
+                      ]
+                  },
+                  config: {
+                      responseMimeType: "application/json",
+                  }
+              });
+
+              const rawResponseText = response.text || "[]";
+              return parseGeminiResponse(rawResponseText);
+          } catch (fallbackErr) {
+              console.error("Fallback transcription path also failed:", fallbackErr);
+          }
+      }
+
+      throw new Error("File processing failed. Please try again on a stable connection.");
+  }
 };
 
 // --- OPENAI WHISPER (Legacy support - returns string) ---
@@ -223,7 +241,7 @@ const transcribeWithOpenAI = async (
   const formData = new FormData();
   formData.append("file", audioFile);
   formData.append("model", "whisper-1");
-  
+
   const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
     headers: { "Authorization": `Bearer ${apiKey}` },
@@ -232,7 +250,7 @@ const transcribeWithOpenAI = async (
 
   if (!response.ok) throw new Error("OpenAI Error");
   const data = await response.json();
-  
+
   return {
       text: data.text,
       providerUsed: TranscriptionProvider.OPENAI
@@ -253,7 +271,7 @@ const transcribeWithAssemblyAI = async (
         const xhr = new XMLHttpRequest();
         xhr.open('POST', 'https://api.assemblyai.com/v2/upload');
         xhr.setRequestHeader('Authorization', apiKey);
-        
+
         if (onProgress) {
             xhr.upload.onprogress = (event) => {
                 if (event.lengthComputable) {
@@ -338,7 +356,7 @@ const transcribeWithAssemblyAI = async (
             // Processing...
             // Fake progress from 30% to 90%
             if (onProgress) {
-                const fakeProgress = 30 + Math.min(60, pollingAttempt * 2); 
+                const fakeProgress = 30 + Math.min(60, pollingAttempt * 2);
                 onProgress(fakeProgress);
             }
             await new Promise((resolve) => setTimeout(resolve, 3000));

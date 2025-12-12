@@ -15,21 +15,34 @@ export const loadGoogleScripts = (): Promise<void> => {
     scriptsLoadedPromise = new Promise((resolve, reject) => {
         let pickerLoaded = false;
         let gisLoaded = false;
+        let timedOut = false;
+
+        const timeout = setTimeout(() => {
+            timedOut = true;
+            reject(new Error("Google scripts failed to load (blocked by network or extensions)."));
+        }, 10000);
 
         const checkDone = () => {
-            if (pickerLoaded && gisLoaded) resolve();
+            if (pickerLoaded && gisLoaded && !timedOut) {
+                clearTimeout(timeout);
+                resolve();
+            }
         };
 
         // 1. Load GAPI (for Picker)
         const loadGapi = () => {
-            if (window.gapi) {
+            const bootstrapPicker = () => {
                 window.gapi.load('picker', {
                     callback: () => {
                         pickerLoaded = true;
                         checkDone();
                     },
-                    onerror: () => console.warn("Picker failed to load (might be blocked by adblocker)")
+                    onerror: () => reject(new Error("Picker failed to initialize. It may be blocked."))
                 });
+            };
+
+            if (window.gapi) {
+                bootstrapPicker();
             } else {
                 const script = document.createElement('script');
                 script.src = 'https://apis.google.com/js/api.js';
@@ -37,12 +50,9 @@ export const loadGoogleScripts = (): Promise<void> => {
                 script.defer = true;
                 script.onload = () => {
                     if (window.gapi) {
-                        window.gapi.load('picker', {
-                            callback: () => {
-                                pickerLoaded = true;
-                                checkDone();
-                            }
-                        });
+                        bootstrapPicker();
+                    } else {
+                        reject(new Error("GAPI failed to initialize."));
                     }
                 };
                 script.onerror = () => reject(new Error("Failed to load Google API script"));
@@ -273,7 +283,7 @@ export const openDrivePicker = async (
     return new Promise((resolve, reject) => {
         try {
             if (!window.google || !window.google.picker) {
-                throw new Error("Picker API failed to load.");
+                throw new Error("Picker API failed to load. Please disable ad blockers and try again.");
             }
 
             const view = new google.picker.DocsView()
