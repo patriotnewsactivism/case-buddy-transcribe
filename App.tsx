@@ -96,9 +96,10 @@ const App: React.FC = () => {
               setDriveLoadingState("Finalizing...");
               handleFilesSelect(files);
           }
-      } catch (e: any) {
-          console.error("Drive Selection Error", e);
-          alert(`Drive Error: ${e.message}`);
+      } catch (e) {
+          const error = e instanceof Error ? e : new Error(String(e));
+          console.error("Drive Selection Error", error);
+          alert(`Drive Error: ${error.message}`);
       } finally {
           setDriveLoadingState(null);
       }
@@ -181,9 +182,10 @@ const App: React.FC = () => {
                  }
             }
 
-        } catch (error: any) {
-            console.error(`Error processing file ${nextItem.file.name}:`, error);
-            updateItem(itemId, { status: 'ERROR', error: error.message || 'Processing Failed' });
+        } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            console.error(`Error processing file ${nextItem.file.name}:`, err);
+            updateItem(itemId, { status: 'ERROR', error: err.message || 'Processing Failed' });
         } finally {
             isProcessingRef.current = false;
             // Force re-evaluation of queue to process next item

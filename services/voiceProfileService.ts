@@ -58,7 +58,11 @@ export const saveVoiceProfile = (name: string): VoiceProfile => {
   profiles.sort((a, b) => b.usageCount - a.usageCount);
 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(profiles));
-  return profiles.find(p => p.name.toLowerCase() === name.toLowerCase())!;
+  const foundProfile = profiles.find(p => p.name.toLowerCase() === name.toLowerCase());
+  if (!foundProfile) {
+    throw new Error(`Profile ${name} not found after saving`);
+  }
+  return foundProfile;
 };
 
 /**

@@ -1,7 +1,32 @@
-// @ts-nocheck
+// Type definitions for Google APIs
+interface GooglePickerResponse {
+  action: string;
+  docs: Array<{
+    id: string;
+    name: string;
+    mimeType: string;
+  }>;
+}
+
+interface TokenResponse {
+  access_token: string;
+  error?: string;
+}
+
+interface DriveFileMetadata {
+  id: string;
+  name: string;
+  mimeType: string;
+}
+
+interface DriveFilesResponse {
+  files?: DriveFileMetadata[];
+  nextPageToken?: string;
+}
+
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
 
-let tokenClient: any = null;
+let tokenClient: google.accounts.oauth2.TokenClient | null = null;
 let savedAccessToken: string | null = null;
 let scriptsLoadedPromise: Promise<void> | null = null;
 
@@ -119,7 +144,7 @@ const getAccessToken = async (clientId: string): Promise<string> => {
         }
 
         // Request token
-        tokenClient.callback = (resp: any) => {
+        tokenClient.callback = (resp: TokenResponse) => {
             if (resp.error) {
                 console.error("OAuth Error:", resp);
                 reject(new Error(`OAuth Error: ${resp.error}`));
@@ -155,7 +180,7 @@ export const uploadToDrive = async (
         });
         
         if (!folderRes.ok) throw new Error("Failed to search Drive folders.");
-        const folderData = await folderRes.json();
+        const folderData = await folderRes.json() as DriveFilesResponse;
         
         let folderId = '';
         if (folderData.files && folderData.files.length > 0) {
@@ -174,7 +199,7 @@ export const uploadToDrive = async (
                 })
             });
             if (!createRes.ok) throw new Error("Failed to create folder.");
-            const createData = await createRes.json();
+            const createData = await createRes.json() as DriveFileMetadata;
             folderId = createData.id;
         }
 
@@ -201,12 +226,13 @@ export const uploadToDrive = async (
             throw new Error(`Upload failed: ${err}`);
         }
 
-        const result = await uploadRes.json();
+        const result = await uploadRes.json() as DriveFileMetadata;
         return result.id;
 
-    } catch (e: any) {
-        console.error("Drive Upload Error:", e);
-        throw e;
+    } catch (e) {
+        const error = e instanceof Error ? e : new Error(String(e));
+        console.error("Drive Upload Error:", error);
+        throw new Error(`Drive upload failed: ${error.message}`);
     }
 };
 
@@ -243,7 +269,7 @@ const listFilesRecursive = async (folderId: string, accessToken: string, apiKey:
         });
         
         if (!res.ok) break;
-        const data = await res.json();
+        const data = await res.json() as DriveFilesResponse;
         const files = data.files || [];
 
         for (const file of files) {
@@ -296,7 +322,7 @@ export const openDrivePicker = async (
                 .addView(view)
                 .addView(google.picker.ViewId.DOCS_AUDIO)
                 .addView(google.picker.ViewId.DOCS_VIDEO)
-                .setCallback(async (data: any) => {
+                .setCallback(async (data: GooglePickerResponse) => {
                     if (data.action === google.picker.Action.PICKED) {
                         const docs = data.docs;
                         const results: File[] = [];
@@ -313,8 +339,9 @@ export const openDrivePicker = async (
                                 }
                             }
                             resolve(results);
-                        } catch (e: any) {
-                            reject(new Error("Download failed: " + e.message));
+                        } catch (e) {
+                            const error = e instanceof Error ? e : new Error(String(e));
+                            reject(new Error("Download failed: " + error.message));
                         }
                     } else if (data.action === google.picker.Action.CANCEL) {
                         resolve([]);
@@ -332,8 +359,9 @@ export const openDrivePicker = async (
             const picker = pickerBuilder.build();
             picker.setVisible(true);
 
-        } catch (e: any) {
-            reject(new Error("Failed to build picker: " + e.message));
+        } catch (e) {
+            const error = e instanceof Error ? e : new Error(String(e));
+            reject(new Error("Failed to build picker: " + error.message));
         }
     });
 };

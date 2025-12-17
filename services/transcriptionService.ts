@@ -1,6 +1,31 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { TranscriptionProvider, TranscriptionSettings, TranscriptionResult, TranscriptSegment } from "../types";
 
+// AssemblyAI API response interfaces
+interface AssemblyAIUtterance {
+  start: number; // milliseconds
+  end: number;   // milliseconds
+  speaker: string;
+  text: string;
+  confidence: number;
+}
+
+interface AssemblyAITranscriptResult {
+  id: string;
+  status: 'queued' | 'processing' | 'completed' | 'error';
+  text?: string;
+  utterances?: AssemblyAIUtterance[];
+  error?: string;
+  language_code?: string;
+  audio_duration?: number;
+  words?: Array<{
+    start: number;
+    end: number;
+    text: string;
+    confidence: number;
+  }>;
+}
+
 /**
  * Polls the Gemini File API until the uploaded file is in the 'ACTIVE' state.
  * Uses exponential backoff starting at 500ms for faster initial checks.
@@ -155,7 +180,8 @@ const transcribeWithGemini = async (
               providerUsed: TranscriptionProvider.GEMINI
           };
       } catch (e) {
-          console.warn("Failed to parse JSON from Gemini, falling back to raw text.", e);
+          const error = e instanceof Error ? e : new Error(String(e));
+          console.warn("Failed to parse JSON from Gemini, falling back to raw text.", error);
           return {
               text: text, // Return raw text if JSON parse fails
               providerUsed: TranscriptionProvider.GEMINI
@@ -198,7 +224,8 @@ const transcribeWithGemini = async (
       return parseGeminiResponse(rawResponseText);
 
   } catch (e) {
-      console.error("Gemini transcription failed:", e);
+      const error = e instanceof Error ? e : new Error(String(e));
+      console.error("Gemini transcription failed:", error);
 
       // Last-resort fallback for very small files if the upload flow fails (keeps app functional offline/CDN blocks)
       if (file.size < 2 * 1024 * 1024) {
@@ -222,11 +249,12 @@ const transcribeWithGemini = async (
               const rawResponseText = response.text || "[]";
               return parseGeminiResponse(rawResponseText);
           } catch (fallbackErr) {
-              console.error("Fallback transcription path also failed:", fallbackErr);
+              const fallbackError = fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
+              console.error("Fallback transcription path also failed:", fallbackError);
           }
       }
 
-      throw new Error("File processing failed. Please try again on a stable connection.");
+      throw new Error(`File processing failed: ${error.message}. Please try again on a stable connection.`);
   }
 };
 
@@ -315,19 +343,26 @@ const transcribeWithAssemblyAI = async (
     const { id } = await response.json();
 
     // 3. Poll for Completion
+    const MAX_POLLING_ATTEMPTS = 120; // 6 minutes max (120 * 3 seconds)
     let pollingAttempt = 0;
-    while (true) {
+
+    while (pollingAttempt < MAX_POLLING_ATTEMPTS) {
         pollingAttempt++;
         const pollingResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
             headers: { 'Authorization': apiKey },
         });
-        const result = await pollingResponse.json();
+
+        if (!pollingResponse.ok) {
+            throw new Error(`AssemblyAI polling failed: ${pollingResponse.statusText}`);
+        }
+
+        const result = await pollingResponse.json() as AssemblyAITranscriptResult;
 
         if (result.status === 'completed') {
             if (onProgress) onProgress(100);
 
             // Map AssemblyAI utterances to our TranscriptSegment format
-            const segments: TranscriptSegment[] = (result.utterances || []).map((u: any) => ({
+            const segments: TranscriptSegment[] = (result.utterances || []).map((u: AssemblyAIUtterance) => ({
                 start: u.start / 1000, // Convert ms to seconds
                 end: u.end / 1000,
                 speaker: `Speaker ${u.speaker}`,
@@ -362,12 +397,14 @@ const transcribeWithAssemblyAI = async (
             await new Promise((resolve) => setTimeout(resolve, 3000));
         }
     }
+
+    throw new Error('AssemblyAI transcription polling timeout after 6 minutes');
 };
 
 // --- MAIN EXPORT ---
 export const transcribeAudio = async (
   file: File | Blob,
-  base64: string, // Unused here, kept for interface compatibility if needed, but logic uses file directly
+  _base64: string, // Unused parameter - kept for backward compatibility
   settings: TranscriptionSettings,
   onProgress?: (percent: number) => void
 ): Promise<TranscriptionResult> => {

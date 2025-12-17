@@ -112,7 +112,11 @@ export const processMediaFile = async (file: File, skipConversion: boolean = fal
     // Only runs if we are using a provider that strictly needs Audio (like Whisper/AssemblyAI limit checks)
     try {
         const arrayBuffer = await file.arrayBuffer();
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextClass) {
+            throw new Error('AudioContext not supported in this browser');
+        }
+        const audioCtx = new AudioContextClass();
         
         // This decodes the raw audio data (CPU intensive)
         const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);

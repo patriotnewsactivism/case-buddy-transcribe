@@ -99,7 +99,11 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplete, stat
   const startVisualizer = (stream: MediaStream) => {
     if (!canvasRef.current) return;
 
-    audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) {
+      throw new Error('AudioContext not supported in this browser');
+    }
+    audioContextRef.current = new AudioContextClass();
     sourceRef.current = audioContextRef.current.createMediaStreamSource(stream);
     analyserRef.current = audioContextRef.current.createAnalyser();
     
