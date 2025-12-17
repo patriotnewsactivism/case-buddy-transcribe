@@ -10,14 +10,17 @@ import { transcribeAudio } from './services/transcriptionService';
 import { processMediaFile } from './utils/audioUtils';
 import { downloadFile, generateFilename, formatTranscriptWithSpeakers } from './utils/fileUtils';
 import { openDrivePicker, uploadToDrive } from './services/driveService';
+import { getRuntimeConfig } from './services/config';
 import { ArrowLeft } from 'lucide-react';
+
+const runtimeConfig = getRuntimeConfig();
 
 const DEFAULT_SETTINGS: TranscriptionSettings = {
   provider: TranscriptionProvider.GEMINI,
-  openaiKey: '',
-  assemblyAiKey: '',
-  googleClientId: '',
-  googleApiKey: '', 
+  openaiKey: runtimeConfig.openAiApiKey,
+  assemblyAiKey: runtimeConfig.assemblyAiApiKey,
+  googleClientId: runtimeConfig.googleDriveClientId,
+  googleApiKey: runtimeConfig.googleDriveApiKey, 
   legalMode: false,
   autoDownloadAudio: false,
   autoDriveUpload: false,

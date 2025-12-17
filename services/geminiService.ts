@@ -1,8 +1,9 @@
 import { GoogleGenAI } from "@google/genai";
+import { getRuntimeConfig } from "./config";
 
 const getAiClient = () => {
-  // The API key must be obtained exclusively from the environment variable process.env.API_KEY.
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const { geminiApiKey } = getRuntimeConfig();
+  return new GoogleGenAI({ apiKey: geminiApiKey });
 };
 
 export const summarizeText = async (text: string): Promise<string> => {

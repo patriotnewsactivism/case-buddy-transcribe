@@ -1,4 +1,5 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import { getRuntimeConfig } from "./config";
 import { TranscriptionProvider, TranscriptionSettings, TranscriptionResult, TranscriptSegment } from "../types";
 
 /**
@@ -104,10 +105,9 @@ const transcribeWithGemini = async (
   settings: TranscriptionSettings,
   onProgress?: (percent: number) => void
 ): Promise<TranscriptionResult> => {
-  const API_KEY = process.env.API_KEY || '';
-  if (!API_KEY) throw new Error("Missing Gemini API Key in environment.");
+  const { geminiApiKey } = getRuntimeConfig();
 
-  const ai = new GoogleGenAI({ apiKey: API_KEY });
+  const ai = new GoogleGenAI({ apiKey: geminiApiKey });
   const modelName = 'gemini-2.5-flash'; // 2.5 Flash is best for structured JSON output + speed
 
   // Build Vocabulary String
@@ -173,12 +173,12 @@ const transcribeWithGemini = async (
       if (onProgress) onProgress(1); // Start progress indication immediately
 
       // 1. Upload via File API (works for all sizes and keeps bandwidth lower than base64)
-      const fileUri = await uploadFileToGemini(file, API_KEY, onProgress);
+      const fileUri = await uploadFileToGemini(file, geminiApiKey, onProgress);
 
       if (onProgress) onProgress(100);
 
       // 2. Wait for processing server-side
-      await waitForFileActive(fileUri, API_KEY);
+      await waitForFileActive(fileUri, geminiApiKey);
 
       // 3. Generate structured transcript
       const response: GenerateContentResponse = await ai.models.generateContent({
