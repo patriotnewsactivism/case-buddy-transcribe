@@ -163,7 +163,7 @@ const App: React.FC = () => {
                     // Upload Transcript
                     await uploadToDrive(
                         settings.googleClientId,
-                        "GeminiWhisper",
+                        "CaseBuddyWhisper",
                         `Transcript_${nextItem.file.name}.txt`,
                         formattedTranscript,
                         "text/plain"
@@ -172,7 +172,7 @@ const App: React.FC = () => {
                     // Upload Original Evidence
                     await uploadToDrive(
                         settings.googleClientId,
-                        "GeminiWhisper",
+                        "CaseBuddyWhisper",
                         nextItem.file.name, 
                         nextItem.file,      
                         nextItem.file.type
