@@ -17,7 +17,7 @@ const Header: React.FC<HeaderProps> = ({ currentMode, setMode, onOpenSettings })
             <Activity size={18} />
           </div>
           <h1 className="text-xl font-bold bg-gradient-to-r from-white to-zinc-400 bg-clip-text text-transparent">
-            Gemini Whisper
+            CaseBuddy Whisper
           </h1>
         </div>
 

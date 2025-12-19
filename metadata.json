@@ -1,6 +1,6 @@
 {
-  "name": "Gemini Whisper",
-  "description": "A high-fidelity AI audio transcription and analysis tool powered by Google Gemini 2.5 Flash. Supports file upload and real-time recording.",
+  "name": "CaseBuddy Whisper",
+  "description": "CaseBuddy Whisper is a high-fidelity AI audio transcription and analysis tool powered by Google Gemini 2.5 Flash. Supports file upload and real-time recording.",
   "requestFramePermissions": [
     "microphone"
   ]
