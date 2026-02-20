@@ -38,14 +38,20 @@ const App: React.FC = () => {
   // Drive State
   const [driveLoadingState, setDriveLoadingState] = useState<string | null>(null);
 
-  // Load settings
+// Load settings
   useEffect(() => {
     const savedSettings = localStorage.getItem('whisper_settings');
     if (savedSettings) {
       try {
         const parsed = JSON.parse(savedSettings);
-        // Ensure customVocabulary exists for older saves
-        setSettings({ ...DEFAULT_SETTINGS, ...parsed, customVocabulary: parsed.customVocabulary || [] });
+        // Merge saved settings with env defaults for API keys (env takes priority if key exists)
+        setSettings({ 
+          ...DEFAULT_SETTINGS, 
+          ...parsed, 
+          customVocabulary: parsed.customVocabulary || [],
+          // Always use env keys if available (they're more secure)
+          assemblyAiKey: import.meta.env.VITE_ASSEMBLYAI_API_KEY || parsed.assemblyAiKey || '',
+        });
       } catch (e) {
         console.error("Failed to parse settings", e);
       }

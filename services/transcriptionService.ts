@@ -92,7 +92,7 @@ const uploadFileToGemini = async (
     return await new Promise<string>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', uploadUrl);
-        xhr.setRequestHeader('Content-Length', file.size.toString());
+        // Note: Content-Length is set automatically by the browser
         xhr.setRequestHeader('X-Goog-Upload-Offset', '0');
         xhr.setRequestHeader('X-Goog-Upload-Command', 'upload, finalize');
 
@@ -380,7 +380,7 @@ const transcribeWithAssemblyAI = async (
             }
 
             return {
-                text: result.text,
+                text: result.text || '',
                 segments: segments,
                 providerUsed: TranscriptionProvider.ASSEMBLYAI,
                 detectedLanguage: result.language_code
