@@ -129,7 +129,7 @@ const transcribeWithGemini = async (
   settings: TranscriptionSettings,
   onProgress?: (percent: number) => void
 ): Promise<TranscriptionResult> => {
-  const API_KEY = process.env.API_KEY || '';
+  const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
   if (!API_KEY) throw new Error("Missing Gemini API Key in environment.");
 
   const ai = new GoogleGenAI({ apiKey: API_KEY });
