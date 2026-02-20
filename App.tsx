@@ -15,13 +15,13 @@ import { ArrowLeft } from 'lucide-react';
 const DEFAULT_SETTINGS: TranscriptionSettings = {
   provider: TranscriptionProvider.GEMINI,
   openaiKey: '',
-  assemblyAiKey: '',
+  assemblyAiKey: import.meta.env.VITE_ASSEMBLYAI_API_KEY || '',
   googleClientId: '',
   googleApiKey: '', 
   legalMode: false,
   autoDownloadAudio: false,
   autoDriveUpload: false,
-  customVocabulary: [], // Initialize empty
+  customVocabulary: [],
 };
 
 const App: React.FC = () => {
