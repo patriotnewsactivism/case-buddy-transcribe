@@ -80,7 +80,7 @@ const uploadFileToGemini = async (
     file: Blob | File,
     onProgress?: (percent: number) => void
 ): Promise<string> => {
-    const accessToken = getAccessToken();
+    const accessToken = await getAccessToken();
     if (!accessToken) throw new Error("User not authenticated for Gemini upload.");
 
     const startResponse = await fetch(`https://generativelanguage.googleapis.com/upload/v1beta/files`, {
