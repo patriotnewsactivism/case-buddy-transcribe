@@ -1,4 +1,3 @@
-
 export enum AppMode {
   UPLOAD = 'UPLOAD',
   RECORD = 'RECORD',
@@ -59,4 +58,10 @@ export interface AudioFile {
   name: string;
   type: string;
   duration?: number;
+}
+
+export interface GoogleUser {
+  email: string;
+  name: string;
+  picture: string;
 }

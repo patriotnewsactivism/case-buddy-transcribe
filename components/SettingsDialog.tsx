@@ -235,7 +235,50 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
           </div>
             
           <hr className="border-zinc-800" />
+            
+           {/* SECTION 5: TROUBLESHOOTING */}
+           <div className="space-y-4">
+             <div className="flex items-center gap-2">
+                 <AlertTriangle size={18} className="text-yellow-500" />
+                 <h3 className="text-sm font-bold text-white uppercase tracking-wider">API & Network Diagnostics</h3>
+             </div>
+             
+             <div className="p-5 bg-zinc-800/30 rounded-xl border border-zinc-800 space-y-4">
+                 <p className="text-xs text-zinc-400">
+                    If uploads are failing with a "403 Forbidden" or network error, your API key might have restrictions. For security, Google API keys are often limited to specific website URLs (referrers).
+                 </p>
+                 <div className="space-y-2">
+                    <label className="text-xs font-medium text-zinc-300">Your Current Origin (for API Key settings)</label>
+                    <div className="relative">
+                        <input
+                            type="text"
+                            readOnly
+                            value={currentOrigin}
+                            className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-3 pr-12 py-2 text-sm text-zinc-400 focus:outline-none"
+                        />
+                         <button
+                            onClick={() => {
+                                navigator.clipboard.writeText(currentOrigin);
+                                setCopiedOrigin(true);
+                                setTimeout(() => setCopiedOrigin(false), 2000);
+                            }}
+                            className="absolute inset-y-0 right-0 px-3 flex items-center text-zinc-400 hover:text-white transition-colors"
+                        >
+                            {copiedOrigin ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}
+                        </button>
+                    </div>
+                 </div>
+                 <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="inline-block text-sm text-indigo-400 hover:text-indigo-300 hover:underline">
+                    Check your Google Cloud Credentials &rarr;
+                 </a>
+                 <p className="text-xs text-zinc-500">
+                    Ensure the origin above is listed under "Website restrictions" for your Gemini API key. For local testing, you may need to add origins like `http://localhost:5173` (Vite) or `http://localhost:3000` (React).
+                 </p>
+             </div>
+          </div>
 
+          <hr className="border-zinc-800" />
+          
           {/* SECTION 4: ENGINE */}
           <div className="space-y-4">
              <div className="flex items-center gap-2">

@@ -1,3 +1,5 @@
+import { getAccessToken } from './googleAuthService';
+
 // Type definitions for Google APIs
 interface GooglePickerResponse {
   action: string;
@@ -6,11 +8,6 @@ interface GooglePickerResponse {
     name: string;
     mimeType: string;
   }>;
-}
-
-interface TokenResponse {
-  access_token: string;
-  error?: string;
 }
 
 interface DriveFileMetadata {
@@ -24,154 +21,22 @@ interface DriveFilesResponse {
   nextPageToken?: string;
 }
 
-const SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file';
-
-let tokenClient: google.accounts.oauth2.TokenClient | null = null;
-let savedAccessToken: string | null = null;
-let scriptsLoadedPromise: Promise<void> | null = null;
-
-/**
- * Dynamically loads Google Scripts (GAPI & GIS) with a singleton promise
- * to prevent race conditions or multiple injections.
- */
-export const loadGoogleScripts = (): Promise<void> => {
-    if (scriptsLoadedPromise) return scriptsLoadedPromise;
-
-    scriptsLoadedPromise = new Promise((resolve, reject) => {
-        let pickerLoaded = false;
-        let gisLoaded = false;
-        let timedOut = false;
-
-        const timeout = setTimeout(() => {
-            timedOut = true;
-            reject(new Error("Google scripts failed to load (blocked by network or extensions)."));
-        }, 10000);
-
-        const checkDone = () => {
-            if (pickerLoaded && gisLoaded && !timedOut) {
-                clearTimeout(timeout);
-                resolve();
-            }
-        };
-
-        // 1. Load GAPI (for Picker)
-        const loadGapi = () => {
-            const bootstrapPicker = () => {
-                window.gapi.load('picker', {
-                    callback: () => {
-                        pickerLoaded = true;
-                        checkDone();
-                    },
-                    onerror: () => reject(new Error("Picker failed to initialize. It may be blocked."))
-                });
-            };
-
-            if (window.gapi) {
-                bootstrapPicker();
-            } else {
-                const script = document.createElement('script');
-                script.src = 'https://apis.google.com/js/api.js';
-                script.async = true;
-                script.defer = true;
-                script.onload = () => {
-                    if (window.gapi) {
-                        bootstrapPicker();
-                    } else {
-                        reject(new Error("GAPI failed to initialize."));
-                    }
-                };
-                script.onerror = () => reject(new Error("Failed to load Google API script"));
-                document.body.appendChild(script);
-            }
-        };
-
-        // 2. Load GIS (for OAuth)
-        const loadGis = () => {
-            if (window.google && window.google.accounts) {
-                gisLoaded = true;
-                checkDone();
-            } else {
-                const script = document.createElement('script');
-                script.src = 'https://accounts.google.com/gsi/client';
-                script.async = true;
-                script.defer = true;
-                script.onload = () => {
-                    gisLoaded = true;
-                    checkDone();
-                };
-                script.onerror = () => reject(new Error("Failed to load Google Identity Services"));
-                document.body.appendChild(script);
-            }
-        };
-
-        loadGapi();
-        loadGis();
-    });
-
-    return scriptsLoadedPromise;
-};
-
-/**
- * Initializes the Token Client (OAuth) logic
- */
-const getAccessToken = async (clientId: string): Promise<string> => {
-    await loadGoogleScripts();
-
-    return new Promise((resolve, reject) => {
-        // Return cached token if available (simple session cache)
-        if (savedAccessToken) {
-            resolve(savedAccessToken);
-            return;
-        }
-
-        if (!window.google || !window.google.accounts) {
-            reject(new Error("Google Identity Services not loaded."));
-            return;
-        }
-
-        // Initialize client if needed
-        if (!tokenClient) {
-            try {
-                tokenClient = google.accounts.oauth2.initTokenClient({
-                    client_id: clientId,
-                    scope: SCOPES,
-                    callback: '', // Will be set in requestAccessToken
-                });
-            } catch (e) {
-                reject(new Error("Failed to init token client. Check Client ID."));
-                return;
-            }
-        }
-
-        // Request token
-        tokenClient.callback = (resp: TokenResponse) => {
-            if (resp.error) {
-                console.error("OAuth Error:", resp);
-                reject(new Error(`OAuth Error: ${resp.error}`));
-            } else {
-                savedAccessToken = resp.access_token;
-                resolve(resp.access_token);
-            }
-        };
-
-        // Trigger popup
-        tokenClient.requestAccessToken({ prompt: 'consent' });
-    });
-};
 
 /**
  * Uploads a file to Google Drive using standard REST API (no gapi.client)
  * This is much more robust against initialization errors.
  */
 export const uploadToDrive = async (
-    clientId: string,
     folderName: string,
     fileName: string, 
     content: Blob | string,
     mimeType: string
 ): Promise<string> => {
     try {
-        const accessToken = await getAccessToken(clientId);
+        const accessToken = getAccessToken();
+        if (!accessToken) {
+            throw new Error("User not signed in. Please sign in with Google to upload to Drive.");
+        }
 
         // 1. Check for existing folder
         const folderQuery = `mimeType='application/vnd.google-apps.folder' and name='${folderName}' and trashed=false`;
@@ -239,7 +104,11 @@ export const uploadToDrive = async (
 /**
  * Downloads a file content via fetch
  */
-const downloadDriveFile = async (fileId: string, fileName: string, mimeType: string, accessToken: string): Promise<File> => {
+const downloadDriveFile = async (fileId: string, fileName: string, mimeType: string): Promise<File> => {
+    const accessToken = getAccessToken();
+    if (!accessToken) {
+        throw new Error("User not signed in.");
+    }
     const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
         headers: { Authorization: `Bearer ${accessToken}` }
     });
@@ -251,7 +120,11 @@ const downloadDriveFile = async (fileId: string, fileName: string, mimeType: str
 /**
  * Helper to recursively list files in folders
  */
-const listFilesRecursive = async (folderId: string, accessToken: string, apiKey: string, onProgress?: (msg: string) => void): Promise<File[]> => {
+const listFilesRecursive = async (folderId: string, apiKey: string, onProgress?: (msg: string) => void): Promise<File[]> => {
+    const accessToken = getAccessToken();
+    if (!accessToken) {
+        throw new Error("User not signed in.");
+    }
     const filesFound: File[] = [];
     const query = `'${folderId}' in parents and (mimeType contains 'audio/' or mimeType contains 'video/' or mimeType = 'application/vnd.google-apps.folder') and trashed = false`;
     let pageToken = null;
@@ -275,11 +148,11 @@ const listFilesRecursive = async (folderId: string, accessToken: string, apiKey:
         for (const file of files) {
             if (file.mimeType === 'application/vnd.google-apps.folder') {
                 if (onProgress) onProgress(`Scanning ${file.name}...`);
-                const children = await listFilesRecursive(file.id, accessToken, apiKey, onProgress);
+                const children = await listFilesRecursive(file.id, apiKey, onProgress);
                 filesFound.push(...children);
             } else {
                 if (onProgress) onProgress(`Downloading ${file.name}...`);
-                filesFound.push(await downloadDriveFile(file.id, file.name, file.mimeType, accessToken));
+                filesFound.push(await downloadDriveFile(file.id, file.name, file.mimeType));
             }
         }
         pageToken = data.nextPageToken;
@@ -292,23 +165,23 @@ const listFilesRecursive = async (folderId: string, accessToken: string, apiKey:
  * Opens the Google Drive Picker
  */
 export const openDrivePicker = async (
-    clientIdRaw: string, 
     apiKeyRaw: string, 
     onProgress?: (msg: string) => void
 ): Promise<File[]> => {
-    const clientId = clientIdRaw?.trim();
     const apiKey = apiKeyRaw?.trim();
 
-    if (!clientId || !apiKey) throw new Error("Missing Client ID or API Key");
+    if (!apiKey) throw new Error("Missing API Key");
 
     if (onProgress) onProgress("Initializing...");
-    await loadGoogleScripts();
-
-    const accessToken = await getAccessToken(clientId);
+    
+    const accessToken = getAccessToken();
+    if (!accessToken) {
+        throw new Error("Please sign in with Google first.");
+    }
 
     return new Promise((resolve, reject) => {
         try {
-            if (!window.google || !window.google.picker) {
+            if (!window.gapi || !window.gapi.picker) {
                 throw new Error("Picker API failed to load. Please disable ad blockers and try again.");
             }
 
@@ -332,10 +205,10 @@ export const openDrivePicker = async (
                                 if (onProgress) onProgress(`Processing ${i+1}/${docs.length}: ${doc.name}`);
                                 
                                 if (doc.mimeType === 'application/vnd.google-apps.folder') {
-                                    const children = await listFilesRecursive(doc.id, accessToken, apiKey, onProgress);
+                                    const children = await listFilesRecursive(doc.id, apiKey, onProgress);
                                     results.push(...children);
                                 } else {
-                                    results.push(await downloadDriveFile(doc.id, doc.name, doc.mimeType, accessToken));
+                                    results.push(await downloadDriveFile(doc.id, doc.name, doc.mimeType));
                                 }
                             }
                             resolve(results);
@@ -347,14 +220,6 @@ export const openDrivePicker = async (
                         resolve([]);
                     }
                 });
-            
-            // Safe App ID extraction
-            try {
-                const appId = clientId.split('-')[0];
-                if (appId) pickerBuilder.setAppId(appId);
-            } catch (e) {
-                // Ignore app ID if parsing fails
-            }
 
             const picker = pickerBuilder.build();
             picker.setVisible(true);
