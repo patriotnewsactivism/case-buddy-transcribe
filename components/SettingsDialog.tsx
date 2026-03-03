@@ -246,24 +246,106 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, settin
              <div className="p-4 bg-zinc-800/30 rounded-xl border border-zinc-800">
                 <div className="grid grid-cols-3 gap-2">
                     {[
-                        { id: TranscriptionProvider.GEMINI, label: 'Gemini (Default)' },
-                        { id: TranscriptionProvider.OPENAI, label: 'Whisper' },
-                        { id: TranscriptionProvider.ASSEMBLYAI, label: 'AssemblyAI' },
+                        { id: TranscriptionProvider.GEMINI, label: 'Gemini (Default)', desc: 'Fast, multimodal, and ideal for quick transcription.' },
+                        { id: TranscriptionProvider.OPENAI, label: 'Whisper', desc: 'Renowned for high accuracy, especially for general audio.' },
+                        { id: TranscriptionProvider.ASSEMBLYAI, label: 'AssemblyAI', desc: 'Specialized for high-stakes accuracy and advanced features.' },
                     ].map((provider) => (
                         <button
                         key={provider.id}
                         onClick={() => setLocalSettings({ ...localSettings, provider: provider.id as TranscriptionProvider })}
-                        className={`py-2 px-3 rounded-lg text-sm font-medium transition-all border ${
+                        className={`group py-2 px-3 rounded-lg text-sm font-medium transition-all border relative overflow-hidden ${
                             localSettings.provider === provider.id
                             ? 'bg-zinc-100 text-zinc-900 border-zinc-100'
                             : 'bg-zinc-800/50 text-zinc-400 border-zinc-700 hover:bg-zinc-800'
                         }`}
+                        title={provider.desc}
                         >
+                        {localSettings.provider === provider.id && (
+                            <span className="absolute inset-0 bg-white/10 animate-pulse-once"></span>
+                        )}
                         {provider.label}
                         </button>
                     ))}
                 </div>
+
+                {/* API Key Warnings */}
+                {localSettings.provider === TranscriptionProvider.OPENAI && !localSettings.openaiKey.trim() && (
+                    <div className="flex items-center gap-2 text-yellow-400 bg-yellow-400/10 p-3 rounded-lg mt-4">
+                        <AlertTriangle size={20} />
+                        <p className="text-sm">Whisper (OpenAI) requires an API Key.</p>
+                    </div>
+                )}
+                {localSettings.provider === TranscriptionProvider.ASSEMBLYAI && !localSettings.assemblyAiKey.trim() && (
+                    <div className="flex items-center gap-2 text-yellow-400 bg-yellow-400/10 p-3 rounded-lg mt-4">
+                        <AlertTriangle size={20} />
+                        <p className="text-sm">AssemblyAI requires an API Key.</p>
+                    </div>
+                )}
              </div>
+
+             {/* API Keys for selected providers */}
+             {localSettings.provider === TranscriptionProvider.OPENAI && (
+                <div className="p-5 bg-zinc-800/30 rounded-xl border border-zinc-800 space-y-4">
+                    <h4 className="text-sm font-bold text-white mb-3">OpenAI API Key (for Whisper)</h4>
+                    <div className="space-y-2">
+                        <label htmlFor="openai-api-key" className="text-xs font-medium text-zinc-300 flex items-center justify-between">
+                            OpenAI Secret Key
+                            <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+                                Get your key <ExternalLink size={14} />
+                            </a>
+                        </label>
+                        <div className="relative">
+                            <input
+                                id="openai-api-key"
+                                type={showOpenAIKey ? 'text' : 'password'}
+                                value={localSettings.openaiKey || ''}
+                                onChange={(e) => setLocalSettings({ ...localSettings, openaiKey: e.target.value })}
+                                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white pr-10 focus:outline-none focus:border-indigo-500"
+                                placeholder="sk-..."
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowOpenAIKey(!showOpenAIKey)}
+                                className="absolute inset-y-0 right-0 pr-3 flex items-center text-zinc-400 hover:text-zinc-200"
+                            >
+                                {showOpenAIKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+             )}
+
+             {localSettings.provider === TranscriptionProvider.ASSEMBLYAI && (
+                <div className="p-5 bg-zinc-800/30 rounded-xl border border-zinc-800 space-y-4">
+                    <h4 className="text-sm font-bold text-white mb-3">AssemblyAI API Key</h4>
+                    <div className="space-y-2">
+                        <label htmlFor="assemblyai-api-key" className="text-xs font-medium text-zinc-300 flex items-center justify-between">
+                            AssemblyAI Secret Key
+                            <a href="https://www.assemblyai.com/dashboard/api-keys" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+                                Get your key <ExternalLink size={14} />
+                            </a>
+                        </label>
+                        <div className="relative">
+                            <input
+                                id="assemblyai-api-key"
+                                type={showAssemblyKey ? 'text' : 'password'}
+                                value={localSettings.assemblyAiKey || ''}
+                                onChange={(e) => setLocalSettings({ ...localSettings, assemblyAiKey: e.target.value })}
+                                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white pr-10 focus:outline-none focus:border-indigo-500"
+                                placeholder="YOUR_ASSEMBLYAI_KEY"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowAssemblyKey(!showAssemblyKey)}
+                                className="absolute inset-y-0 right-0 pr-3 flex items-center text-zinc-400 hover:text-zinc-200"
+                            >
+                                {showAssemblyKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+             )}
+
           </div>
 
         </div>
