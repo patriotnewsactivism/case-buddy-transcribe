@@ -33,7 +33,7 @@ export const uploadToDrive = async (
     mimeType: string
 ): Promise<string> => {
     try {
-        const accessToken = getAccessToken();
+        const accessToken = await getAccessToken();
         if (!accessToken) {
             throw new Error("User not signed in. Please sign in with Google to upload to Drive.");
         }
@@ -105,7 +105,7 @@ export const uploadToDrive = async (
  * Downloads a file content via fetch
  */
 const downloadDriveFile = async (fileId: string, fileName: string, mimeType: string): Promise<File> => {
-    const accessToken = getAccessToken();
+    const accessToken = await getAccessToken();
     if (!accessToken) {
         throw new Error("User not signed in.");
     }
@@ -121,7 +121,7 @@ const downloadDriveFile = async (fileId: string, fileName: string, mimeType: str
  * Helper to recursively list files in folders
  */
 const listFilesRecursive = async (folderId: string, apiKey: string, onProgress?: (msg: string) => void): Promise<File[]> => {
-    const accessToken = getAccessToken();
+    const accessToken = await getAccessToken();
     if (!accessToken) {
         throw new Error("User not signed in.");
     }

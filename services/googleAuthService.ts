@@ -10,6 +10,7 @@ export interface GoogleUser {
 let tokenClient: google.accounts.oauth2.TokenClient | null = null;
 let googleUser: GoogleUser | null = null;
 let accessToken: string | null = null;
+let tokenExpiry: number | null = null; // Time when token expires (timestamp in milliseconds)
 let onUserChangeCallback: ((user: GoogleUser | null) => void) | null = null;
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
@@ -42,6 +43,8 @@ export const initGoogleAuth = (onUserUpdate: (user: GoogleUser | null) => void) 
       }
       
       accessToken = tokenResponse.access_token;
+      const expiresIn = tokenResponse.expires_in || 3600; // Default to 1 hour if not provided
+      tokenExpiry = Date.now() + expiresIn * 1000;
 
       // The ID token is not provided in the token response, so we need to
       // get it from the implicit flow (handled by the GIS library button)
@@ -118,8 +121,39 @@ export const getUser = (): GoogleUser | null => {
 
 /**
  * Returns the current access token.
+ * If the token is expired or will expire soon, automatically refreshes it.
  */
-export const getAccessToken = (): string | null => {
-  // TODO: Add logic to refresh the token if it's expired.
+export const getAccessToken = async (): Promise<string | null> => {
+  // Check if we have an access token and if it's expired or will expire soon
+  const now = Date.now();
+  const isTokenExpired = !accessToken || !tokenExpiry || now >= tokenExpiry - 60000; // Refresh 1 minute before expiry
+  
+  if (isTokenExpired && tokenClient) {
+    console.log("Access token expired or expiring soon. Refreshing...");
+    try {
+      await new Promise<void>((resolve, reject) => {
+        tokenClient!.requestAccessToken({ prompt: 'none' }); // Silent refresh without user interaction
+        // We need to wait for the callback to update the token
+        const checkTokenUpdate = setInterval(() => {
+          if (accessToken && tokenExpiry && now < tokenExpiry - 60000) {
+            clearInterval(checkTokenUpdate);
+            resolve();
+          }
+        }, 1000);
+        
+        // Timeout after 10 seconds
+        setTimeout(() => {
+          clearInterval(checkTokenUpdate);
+          reject(new Error("Token refresh timeout"));
+        }, 10000);
+      });
+    } catch (error) {
+      console.error("Failed to refresh access token:", error);
+      // If refresh fails, sign out the user
+      signOut();
+      return null;
+    }
+  }
+  
   return accessToken;
 };
