@@ -166,11 +166,12 @@ const App: React.FC = () => {
               throw new Error("Please sign in with Google to use the Gemini engine.");
             }
 
-            const skipConversion = settings.provider === TranscriptionProvider.GEMINI;
+            // Always extract audio from video files for better performance
+            const skipConversion = false;
             
             updateItem(itemId, { 
                 status: 'PROCESSING', 
-                stage: skipConversion ? 'Uploading...' : 'Optimizing Audio...', 
+                stage: nextItem.file.type.startsWith('video/') ? 'Extracting Audio...' : 'Optimizing Audio...', 
                 progress: 5 
             });
             

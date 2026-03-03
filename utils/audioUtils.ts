@@ -90,71 +90,95 @@ export const encodeWAV = (samples: Float32Array, sampleRate: number = 16000, num
  * makes the process 10x faster.
  */
 export const processMediaFile = async (file: File, skipConversion: boolean = false): Promise<Blob> => {
-    // 0. SPEED PATH: If provider supports video (Gemini), return immediately.
-    if (skipConversion) {
-      return file;
-    }
-
-    // 1. FAST PATH: Small audio files (< 10MB) don't need processing
-    if (file.type.startsWith('audio/') && file.size < 10 * 1024 * 1024) {
-        return file;
-    }
-
-    // 2. SAFETY LIMIT: Browser Memory Cap (~1.8 GB)
-    const MAX_SAFE_SIZE = 1.8 * 1024 * 1024 * 1024; // 1.8 GB
-    
-    if (file.size > MAX_SAFE_SIZE) {
-        console.warn(`File size exceeds browser memory safety limit. Uploading original file directly.`);
-        return file;
-    }
-
-    // 3. CONVERSION PATH: Extract audio from video/audio file
-    // Only runs if we are using a provider that strictly needs Audio (like Whisper/AssemblyAI limit checks)
-    try {
-        const arrayBuffer = await file.arrayBuffer();
-        const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (!AudioContextClass) {
-            throw new Error('AudioContext not supported in this browser');
-        }
-        const audioCtx = new AudioContextClass();
-        
-        // This decodes the raw audio data (CPU intensive)
-        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-        
-        // Determine channels (Keep Stereo if available for better AI Diarization)
-        const numChannels = audioBuffer.numberOfChannels >= 2 ? 2 : 1;
-        
-        // Resample to 16kHz (Standard for Speech AI)
-        const targetRate = 16000;
-        const offlineCtx = new OfflineAudioContext(numChannels, audioBuffer.duration * targetRate, targetRate);
-        
-        const source = offlineCtx.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(offlineCtx.destination);
-        source.start();
-        
-        const renderedBuffer = await offlineCtx.startRendering();
-        
-        // Prepare samples (Interleave if Stereo)
-        let finalSamples: Float32Array;
-        
-        if (numChannels === 2) {
-            const left = renderedBuffer.getChannelData(0);
-            const right = renderedBuffer.getChannelData(1);
-            finalSamples = new Float32Array(left.length + right.length);
-            for (let i = 0; i < left.length; i++) {
-                finalSamples[i * 2] = left[i];
-                finalSamples[i * 2 + 1] = right[i];
+    // Always extract audio from video files for better performance and smaller file size
+    if (file.type.startsWith('video/')) {
+        try {
+            console.log(`Extracting audio from video file: ${file.name}`);
+            
+            // Create a video element to extract audio
+            const videoElement = document.createElement('video');
+            videoElement.src = URL.createObjectURL(file);
+            
+            await new Promise<void>((resolve, reject) => {
+                videoElement.addEventListener('loadedmetadata', () => resolve());
+                videoElement.addEventListener('error', () => reject(new Error('Failed to load video')));
+            });
+            
+            // Create an audio context and media element source
+            const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+            if (!AudioContextClass) {
+                throw new Error('AudioContext not supported in this browser');
             }
-        } else {
-            finalSamples = renderedBuffer.getChannelData(0);
+            const audioCtx = new AudioContextClass();
+            const mediaSource = audioCtx.createMediaElementSource(videoElement);
+            
+            // Create an offline context to render the audio
+            const targetRate = 16000; // Standard for speech AI
+            const numChannels = 1; // Mono is sufficient for transcription and reduces file size
+            const offlineCtx = new OfflineAudioContext(numChannels, videoElement.duration * targetRate, targetRate);
+            
+            mediaSource.connect(offlineCtx.destination);
+            
+            // Start playing and render
+            videoElement.play();
+            const renderedBuffer = await offlineCtx.startRendering();
+            
+            // Encode to WAV
+            const wavBlob = encodeWAV(renderedBuffer.getChannelData(0), targetRate, numChannels);
+            console.log(`Audio extraction complete. File size reduced from ${(file.size / 1024 / 1024).toFixed(2)}MB to ${(wavBlob.size / 1024 / 1024).toFixed(2)}MB`);
+            
+            URL.revokeObjectURL(videoElement.src);
+            return wavBlob;
+            
+        } catch (e) {
+            console.warn("Client-side audio extraction from video failed. Falling back to original file.", e);
+            return file; 
         }
-        
-        // Encode to WAV
-        return encodeWAV(finalSamples, targetRate, numChannels);
-
-    } catch (e) {
-        console.warn("Client-side audio conversion failed (likely Out of Memory). Falling back to original file upload.", e);
-        return file; 
     }
+
+    // For audio files, apply optimizations if needed
+    if (file.type.startsWith('audio/')) {
+        // Small audio files (< 10MB) don't need processing
+        if (file.size < 10 * 1024 * 1024) {
+            return file;
+        }
+
+        // For larger audio files, optimize
+        try {
+            console.log(`Optimizing audio file: ${file.name}`);
+            
+            const arrayBuffer = await file.arrayBuffer();
+            const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+            if (!AudioContextClass) {
+                throw new Error('AudioContext not supported in this browser');
+            }
+            const audioCtx = new AudioContextClass();
+            
+            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+            
+            const numChannels = 1; // Convert to mono for smaller file size
+            const targetRate = 16000; // Standard for speech AI
+            
+            const offlineCtx = new OfflineAudioContext(numChannels, audioBuffer.duration * targetRate, targetRate);
+            const source = offlineCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(offlineCtx.destination);
+            source.start();
+            
+            const renderedBuffer = await offlineCtx.startRendering();
+            
+            const wavBlob = encodeWAV(renderedBuffer.getChannelData(0), targetRate, numChannels);
+            console.log(`Audio optimization complete. File size reduced from ${(file.size / 1024 / 1024).toFixed(2)}MB to ${(wavBlob.size / 1024 / 1024).toFixed(2)}MB`);
+            
+            return wavBlob;
+            
+        } catch (e) {
+            console.warn("Client-side audio optimization failed. Falling back to original file.", e);
+            return file; 
+        }
+    }
+
+    // If not an audio or video file, return as is (though validation should prevent this)
+    console.warn(`File type ${file.type} is not audio or video. Returning as is.`);
+    return file;
 };
