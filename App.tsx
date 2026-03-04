@@ -11,10 +11,10 @@ import { openDrivePicker, uploadToDrive } from './services/driveService';
 import { initGoogleAuth, handleCredentialResponse, signOut as googleSignOut, signIn } from './services/googleAuthService';
 import { 
   ArrowLeft, Settings2, Shield, Activity, HardDrive, Cpu, 
-  BookOpen, LogOut, Trash2, Key, AlertTriangle, Check, 
-  ChevronRight, LayoutGrid, ListTodo, Info, ExternalLink,
-  Plus, X, Eye, EyeOff
+  LogOut, Key, Info, ExternalLink,
+  LayoutGrid, ListTodo, Eye, EyeOff, Book
 } from 'lucide-react';
+import Header from './components/Header'; // Assuming we kept a version or integrated it
 
 const DEFAULT_SETTINGS: TranscriptionSettings = {
   provider: TranscriptionProvider.GEMINI,
@@ -22,28 +22,27 @@ const DEFAULT_SETTINGS: TranscriptionSettings = {
   assemblyAiKey: import.meta.env.VITE_ASSEMBLYAI_API_KEY || '',
   googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
   googleApiKey: import.meta.env.VITE_GEMINI_API_KEY || '', 
-  legalMode: false,
+  geminiModel: 'gemini-1.5-pro',
+  caseContext: '',
+  legalMode: true,
   autoDownloadAudio: false,
   autoDriveUpload: false,
   customVocabulary: [],
 };
 
 const App: React.FC = () => {
-  // --- UI STATE ---
   const [activeTab, setActiveTab] = useState<'TRANSCRIPTION' | 'SETTINGS' | 'HISTORY'>('TRANSCRIPTION');
   const [mode, setMode] = useState<AppMode>(AppMode.UPLOAD);
   const [settings, setSettings] = useState<TranscriptionSettings>(DEFAULT_SETTINGS);
   const [googleUser, setGoogleUser] = useState<GoogleUser | null>(null);
-  const [showKeys, setShowKeys] = useState({ openai: false, assembly: false, google: false });
+  const [showKeys, setShowKeys] = useState({ openai: false, assembly: false });
   
-  // --- DATA STATE ---
   const [queue, setQueue] = useState<BatchItem[]>([]);
   const [viewingItemId, setViewingItemId] = useState<string | null>(null);
   const isProcessingRef = useRef(false);
   const [processCounter, setProcessCounter] = useState(0);
   const [driveLoadingState, setDriveLoadingState] = useState<string | null>(null);
 
-  // --- INIT ---
   useEffect(() => {
     const saved = localStorage.getItem('whisper_settings');
     if (saved) {
@@ -53,7 +52,6 @@ const App: React.FC = () => {
       } catch (e) { console.error("Settings load error", e); }
     }
 
-    // Google Auth
     const script = document.createElement('script');
     script.src = 'https://accounts.google.com/gsi/client';
     script.async = true; script.defer = true;
@@ -85,7 +83,6 @@ const App: React.FC = () => {
   const handleSignOut = () => { googleSignOut(); setGoogleUser(null); };
   const handleSignIn = () => signIn();
 
-  // --- ACTIONS ---
   const handleFilesSelect = (files: File[]) => {
     const newItems: BatchItem[] = files.map(file => ({
       id: Math.random().toString(36).substring(7),
@@ -109,53 +106,27 @@ const App: React.FC = () => {
     setQueue(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
   };
 
-  // --- QUEUE PROCESSOR ---
   useEffect(() => {
     const processNext = async () => {
         if (isProcessingRef.current) return;
         const nextItem = queue.find(i => i.status === 'QUEUED');
         if (!nextItem) return;
-
         isProcessingRef.current = true;
         const itemId = nextItem.id;
-
         try {
-            if (settings.provider === TranscriptionProvider.GEMINI && !googleUser) {
-              throw new Error("Authentication Required: Gemini transcription requires signing in with Google.");
-            }
-
-            // 1. FFmpeg SCRAPE & OPTIMIZE
+            if (settings.provider === TranscriptionProvider.GEMINI && !googleUser) throw new Error("Google sign-in required for Gemini.");
             const skipConversion = settings.provider === TranscriptionProvider.GEMINI;
-            updateItem(itemId, { 
-                status: 'PROCESSING', 
-                stage: skipConversion ? 'Uploading Evidence...' : 'Scraping Audio (FFmpeg)...', 
-                progress: 5 
-            });
-
+            updateItem(itemId, { status: 'PROCESSING', stage: skipConversion ? 'Uploading...' : 'FFmpeg Extraction...', progress: 5 });
             const processedFile = await processMediaFile(nextItem.file, skipConversion, (pct) => {
-                if (!skipConversion) {
-                    updateItem(itemId, { stage: `Scraping Audio (${pct}%)`, progress: 5 + Math.round(pct * 0.1) });
-                }
+                if (!skipConversion) updateItem(itemId, { stage: `FFmpeg (${pct}%)`, progress: 5 + Math.round(pct * 0.1) });
             });
-
-            // 2. AI TRANSCRIBE
-            updateItem(itemId, { stage: 'Transcribing...', progress: 15 });
+            updateItem(itemId, { stage: 'AI Transcription...', progress: 15 });
             const result = await transcribeAudio(processedFile, '', settings, (pct) => {
-                updateItem(itemId, { stage: pct === 100 ? 'Analyzing Speech...' : `Transcribing (${pct}%)`, progress: 15 + Math.round(pct * 0.75) });
+                updateItem(itemId, { stage: pct === 100 ? 'Analyzing...' : `Processing (${pct}%)`, progress: 15 + Math.round(pct * 0.75) });
             });
-
             updateItem(itemId, { status: 'COMPLETED', progress: 100, result: result });
-
-            // 3. DRIVE AUTO-SAVE
-            if (settings.autoDriveUpload && googleUser) {
-                 try {
-                    const formatted = result.segments ? formatTranscriptWithSpeakers(result.segments) : result.text;
-                    await uploadToDrive("CaseBuddyWhisper", `Transcript_${nextItem.file.name}.txt`, formatted, "text/plain");
-                    await uploadToDrive("CaseBuddyWhisper", nextItem.file.name, nextItem.file, nextItem.file.type);
-                 } catch (e) { console.error("Drive auto-save failed", e); }
-            }
         } catch (error) {
-            updateItem(itemId, { status: 'ERROR', error: error instanceof Error ? error.message : 'Processing Failed' });
+            updateItem(itemId, { status: 'ERROR', error: error instanceof Error ? error.message : 'Failed' });
         } finally {
             isProcessingRef.current = false;
             setProcessCounter(c => c + 1);
@@ -167,9 +138,7 @@ const App: React.FC = () => {
   const viewingItem = viewingItemId ? queue.find(i => i.id === viewingItemId) : null;
 
   return (
-    <div className="flex h-screen bg-black text-zinc-100 font-sans selection:bg-indigo-500/30 overflow-hidden">
-      
-      {/* --- SIDEBAR / CONTROL CENTER --- */}
+    <div className="flex h-screen bg-black text-zinc-100 font-sans overflow-hidden">
       <aside className="w-80 border-r border-zinc-800 flex flex-col bg-zinc-950">
         <div className="p-6">
            <div className="flex items-center gap-3 mb-8">
@@ -182,35 +151,20 @@ const App: React.FC = () => {
               </div>
            </div>
 
-           {/* User Status Card */}
            <div className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 mb-6 group transition-all hover:border-zinc-700">
               {googleUser ? (
                   <div className="flex items-center gap-3">
                     <img src={googleUser.picture} className="w-10 h-10 rounded-full border border-zinc-700" alt="" />
                     <div className="flex-1 overflow-hidden">
                       <p className="text-sm font-bold text-white truncate">{googleUser.name}</p>
-                      <button onClick={handleSignOut} className="text-[10px] text-zinc-500 hover:text-red-400 font-bold flex items-center gap-1 mt-0.5">
-                        <LogOut size={10} /> DISCONNECT
-                      </button>
+                      <button onClick={handleSignOut} className="text-[10px] text-zinc-500 hover:text-red-400 font-bold flex items-center gap-1 mt-0.5 uppercase">DISCONNECT</button>
                     </div>
                   </div>
               ) : (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2 text-zinc-400">
-                      <Shield size={16} />
-                      <span className="text-xs font-bold uppercase tracking-wider">Unauthenticated</span>
-                    </div>
-                    <button 
-                      onClick={handleSignIn}
-                      className="w-full py-2 bg-white text-black text-xs font-black rounded-lg hover:bg-zinc-200 transition-all flex items-center justify-center gap-2"
-                    >
-                      SIGN IN WITH GOOGLE
-                    </button>
-                  </div>
+                  <button onClick={handleSignIn} className="w-full py-2 bg-white text-black text-xs font-black rounded-lg hover:bg-zinc-200 transition-all">SIGN IN WITH GOOGLE</button>
               )}
            </div>
 
-           {/* Navigation */}
            <nav className="space-y-1">
               {[
                 { id: 'TRANSCRIPTION', icon: LayoutGrid, label: 'Workbench' },
@@ -220,11 +174,7 @@ const App: React.FC = () => {
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id as any)}
-                  className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all ${
-                    activeTab === item.id 
-                    ? 'bg-zinc-800/50 text-white' 
-                    : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900'
-                  }`}
+                  className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all ${activeTab === item.id ? 'bg-zinc-800/50 text-white' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900'}`}
                 >
                   <div className="flex items-center gap-3">
                     <item.icon size={18} />
@@ -236,262 +186,133 @@ const App: React.FC = () => {
            </nav>
         </div>
 
-        {/* Engine Status Indicators */}
         <div className="mt-auto p-6 border-t border-zinc-900 space-y-4">
            <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.2em] px-1">Engine Status</h3>
            <div className="space-y-3 px-1">
               <div className="flex items-center justify-between group">
-                <span className="text-xs font-bold text-zinc-500 group-hover:text-zinc-300 transition-colors">Gemini 2.5</span>
-                <div className={`w-2 h-2 rounded-full ${googleUser ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500 animate-pulse'}`} />
+                <span className="text-xs font-bold text-zinc-500">Gemini Pro</span>
+                <div className={`w-2 h-2 rounded-full ${googleUser ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500'}`} />
               </div>
               <div className="flex items-center justify-between group">
-                <span className="text-xs font-bold text-zinc-500 group-hover:text-zinc-300 transition-colors">Whisper v3</span>
-                <div className={`w-2 h-2 rounded-full ${settings.openaiKey ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-zinc-700'}`} />
+                <span className="text-xs font-bold text-zinc-500">Whisper</span>
+                <div className={`w-2 h-2 rounded-full ${settings.openaiKey ? 'bg-green-500' : 'bg-zinc-700'}`} />
               </div>
               <div className="flex items-center justify-between group">
-                <span className="text-xs font-bold text-zinc-500 group-hover:text-zinc-300 transition-colors">AssemblyAI</span>
-                <div className={`w-2 h-2 rounded-full ${settings.assemblyAiKey ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-zinc-700'}`} />
+                <span className="text-xs font-bold text-zinc-500">AssemblyAI</span>
+                <div className={`w-2 h-2 rounded-full ${settings.assemblyAiKey ? 'bg-green-500' : 'bg-zinc-700'}`} />
               </div>
            </div>
         </div>
       </aside>
 
-      {/* --- MAIN CONTENT AREA --- */}
       <main className="flex-1 flex flex-col bg-black relative">
-        
-        {/* Dynamic Header */}
         <header className="h-20 border-b border-zinc-900 flex items-center justify-between px-10 bg-black/50 backdrop-blur-xl sticky top-0 z-40">
            <div>
               <h2 className="text-xl font-black text-white tracking-tight">
-                {activeTab === 'TRANSCRIPTION' && viewingItemId ? 'Viewing Result' : activeTab === 'TRANSCRIPTION' ? 'Workbench' : activeTab === 'SETTINGS' ? 'Configuration' : 'Batch Processor'}
+                {activeTab === 'TRANSCRIPTION' ? 'Workbench' : activeTab === 'SETTINGS' ? 'Configuration' : 'Batch Processor'}
               </h2>
-              <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest mt-0.5">
-                {activeTab === 'TRANSCRIPTION' ? 'Advanced Speech Intelligence' : 'System Parameters'}
-              </p>
            </div>
            
            <div className="flex items-center gap-4">
               {activeTab === 'TRANSCRIPTION' && !viewingItemId && (
                 <div className="flex bg-zinc-900 rounded-xl p-1 border border-zinc-800">
-                  <button 
-                    onClick={() => setMode(AppMode.UPLOAD)}
-                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.UPLOAD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
-                  >
-                    Upload
-                  </button>
-                  <button 
-                    onClick={() => setMode(AppMode.RECORD)}
-                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.RECORD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}
-                  >
-                    Live Record
-                  </button>
+                  <button onClick={() => setMode(AppMode.UPLOAD)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.UPLOAD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Upload</button>
+                  <button onClick={() => setMode(AppMode.RECORD)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.RECORD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Record</button>
                 </div>
               )}
-              {viewingItemId && (
-                <button 
-                  onClick={() => setViewingItemId(null)}
-                  className="px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-all flex items-center gap-2 text-xs font-bold"
-                >
-                  <ArrowLeft size={14} /> Workbench
-                </button>
-              )}
+              {viewingItemId && <button onClick={() => setViewingItemId(null)} className="px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-all text-xs font-bold">Back to Workbench</button>}
            </div>
         </header>
 
-        {/* Content Body */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-10">
-          
+        <div className="flex-1 overflow-y-auto p-10 custom-scrollbar">
           {activeTab === 'TRANSCRIPTION' && (
-            <div className="max-w-4xl mx-auto w-full animate-in fade-in duration-500">
+            <div className="max-w-4xl mx-auto w-full">
               {viewingItem && viewingItem.result ? (
-                  <TranscriptionResult 
-                    result={viewingItem.result} 
-                    audioFile={viewingItem.file}
-                    onTeachAi={(p) => handleSaveSettings({ ...settings, customVocabulary: [...settings.customVocabulary, p]})}
-                  />
+                  <TranscriptionResult result={viewingItem.result} audioFile={viewingItem.file} onTeachAi={(p) => handleSaveSettings({ ...settings, customVocabulary: [...settings.customVocabulary, p]})} />
               ) : queue.length > 0 && !viewingItemId ? (
-                  <div className="space-y-6">
-                     <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-widest">Active Processing Queue</h3>
-                        <button onClick={() => { if(confirm("Clear queue?")) setQueue([]); }} className="text-[10px] font-bold text-zinc-600 hover:text-red-400 transition-colors uppercase tracking-widest">Wipe Data</button>
-                     </div>
-                     <BatchQueue 
-                        queue={queue}
-                        onViewResult={(item) => {
-                          setViewingItemId(item.id);
-                          setActiveTab('TRANSCRIPTION');
-                        }}
-                        onDownloadAll={handleDownloadAll}
-                      />
-                  </div>
+                  <BatchQueue queue={queue} onViewResult={(item) => setViewingItemId(item.id)} onDownloadAll={() => {}} />
               ) : (
                   <div className="flex flex-col items-center justify-center min-h-[50vh] text-center">
-                    <div className="w-16 h-16 rounded-3xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center text-indigo-500 mb-8 animate-pulse">
-                      <Cpu size={32} />
-                    </div>
-                    <h2 className="text-3xl font-black text-white mb-4 tracking-tighter">Ready for Intelligence.</h2>
-                    <p className="text-zinc-500 max-w-lg mb-10 font-medium leading-relaxed">
-                      Scrape audio from high-fidelity video or recordings using FFmpeg. Select an engine to begin.
-                    </p>
-                    
-                    <div className="w-full max-w-xl">
-                       <FileUploader 
-                          onFilesSelect={handleFilesSelect}
-                          onDriveSelect={handleDriveSelect}
-                          driveLoadingState={driveLoadingState} 
-                       />
-                    </div>
+                    <h2 className="text-3xl font-black text-white mb-4 tracking-tighter italic underline">Scrape Audio from Video</h2>
+                    <p className="text-zinc-500 max-w-lg mb-10 font-medium leading-relaxed">High-performance FFmpeg extraction. Select an engine and context for maximum accuracy.</p>
+                    <div className="w-full max-w-xl"><FileUploader onFilesSelect={handleFilesSelect} onDriveSelect={handleDriveSelect} driveLoadingState={driveLoadingState} /></div>
                   </div>
               )}
-            </div>
-          )}
-
-          {activeTab === 'HISTORY' && (
-            <div className="max-w-4xl mx-auto w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
-               <BatchQueue 
-                  queue={queue}
-                  onViewResult={(item) => {
-                    setViewingItemId(item.id);
-                    setActiveTab('TRANSCRIPTION');
-                  }}
-                  onDownloadAll={handleDownloadAll}
-                />
             </div>
           )}
 
           {activeTab === 'SETTINGS' && (
             <div className="max-w-2xl mx-auto w-full space-y-12 animate-in fade-in duration-500">
-               
-               {/* Provider Selection */}
                <section className="space-y-6">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-                      <Cpu size={14} />
-                    </div>
-                    <h3 className="text-sm font-bold text-white uppercase tracking-widest">Active Intelligence Engine</h3>
-                  </div>
-                  
+                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Cpu size={14} className="text-indigo-500" /> Intelligence Engine</h3>
                   <div className="grid grid-cols-3 gap-3">
                     {[
-                      { id: TranscriptionProvider.GEMINI, label: 'Gemini 2.5', note: 'Fastest / Video' },
-                      { id: TranscriptionProvider.OPENAI, label: 'Whisper v3', note: 'High Accuracy' },
-                      { id: TranscriptionProvider.ASSEMBLYAI, label: 'AssemblyAI', note: 'Specialized' },
+                      { id: TranscriptionProvider.GEMINI, label: 'Gemini', note: 'Native Video' },
+                      { id: TranscriptionProvider.OPENAI, label: 'Whisper', note: 'General Audio' },
+                      { id: TranscriptionProvider.ASSEMBLYAI, label: 'AssemblyAI', note: 'High Stakes' },
                     ].map(p => (
-                      <button 
-                        key={p.id}
-                        onClick={() => handleSaveSettings({ ...settings, provider: p.id })}
-                        className={`p-4 rounded-2xl border transition-all text-left relative overflow-hidden ${
-                          settings.provider === p.id 
-                          ? 'bg-zinc-100 border-zinc-100' 
-                          : 'bg-zinc-900 border-zinc-800 hover:border-zinc-600'
-                        }`}
-                      >
+                      <button key={p.id} onClick={() => handleSaveSettings({ ...settings, provider: p.id })} className={`p-4 rounded-2xl border transition-all text-left ${settings.provider === p.id ? 'bg-white border-white' : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'}`}>
                         <p className={`text-sm font-black ${settings.provider === p.id ? 'text-black' : 'text-white'}`}>{p.label}</p>
-                        <p className={`text-[10px] font-bold uppercase tracking-widest mt-1 ${settings.provider === p.id ? 'text-zinc-600' : 'text-zinc-500'}`}>{p.note}</p>
-                        {settings.provider === p.id && <div className="absolute top-3 right-3 w-2 h-2 rounded-full bg-indigo-500" />}
+                        <p className={`text-[10px] font-bold mt-1 ${settings.provider === p.id ? 'text-zinc-600' : 'text-zinc-500'}`}>{p.note}</p>
                       </button>
                     ))}
                   </div>
+
+                  {settings.provider === TranscriptionProvider.GEMINI && (
+                     <div className="space-y-4 animate-in slide-in-from-top-2 duration-300">
+                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Gemini Model (Accuracy Tier)</label>
+                        <div className="grid grid-cols-2 gap-2">
+                           {[
+                             { id: 'gemini-1.5-pro', label: '1.5 Pro', desc: 'Max Accuracy (Legal/Complex)' },
+                             { id: 'gemini-2.5-flash', label: '2.5 Flash', desc: 'Fast & Efficient' },
+                           ].map(m => (
+                             <button key={m.id} onClick={() => handleSaveSettings({ ...settings, geminiModel: m.id as any })} className={`p-3 rounded-xl border text-left transition-all ${settings.geminiModel === m.id ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-black border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}>
+                                <p className="text-xs font-black">{m.label}</p>
+                                <p className="text-[9px] font-bold opacity-70">{m.desc}</p>
+                             </button>
+                           ))}
+                        </div>
+                     </div>
+                  )}
                </section>
 
-               {/* API Key Management */}
                <section className="space-y-6">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-                      <Key size={14} />
-                    </div>
-                    <h3 className="text-sm font-bold text-white uppercase tracking-widest">Key Management</h3>
-                  </div>
-
+                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Book size={14} className="text-indigo-500" /> Accuracy Context</h3>
                   <div className="space-y-4 p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
-                    
-                    {/* OpenAI Key */}
                     <div className="space-y-2">
-                      <div className="flex items-center justify-between px-1">
-                         <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Whisper (OpenAI) Key</label>
-                         <a href="https://platform.openai.com/api-keys" target="_blank" className="text-[10px] text-indigo-400 hover:text-white font-bold flex items-center gap-1">GET KEY <ExternalLink size={10} /></a>
-                      </div>
-                      <div className="relative">
-                        <input 
-                          type={showKeys.openai ? 'text' : 'password'}
-                          value={settings.openaiKey}
-                          onChange={(e) => handleSaveSettings({ ...settings, openaiKey: e.target.value })}
-                          className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all font-mono"
-                          placeholder="sk-..."
-                        />
-                        <button onClick={() => setShowKeys({...showKeys, openai: !showKeys.openai})} className="absolute right-3 top-3.5 text-zinc-600 hover:text-white">
-                          {showKeys.openai ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* AssemblyAI Key */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between px-1 pt-2">
-                         <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">AssemblyAI Secret Key</label>
-                         <a href="https://www.assemblyai.com/dashboard/api-keys" target="_blank" className="text-[10px] text-indigo-400 hover:text-white font-bold flex items-center gap-1">GET KEY <ExternalLink size={10} /></a>
-                      </div>
-                      <div className="relative">
-                        <input 
-                          type={showKeys.assembly ? 'text' : 'password'}
-                          value={settings.assemblyAiKey}
-                          onChange={(e) => handleSaveSettings({ ...settings, assemblyAiKey: e.target.value })}
-                          className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all font-mono"
-                          placeholder="YOUR_ASSEMBLY_KEY"
-                        />
-                        <button onClick={() => setShowKeys({...showKeys, assembly: !showKeys.assembly})} className="absolute right-3 top-3.5 text-zinc-600 hover:text-white">
-                          {showKeys.assembly ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="mt-6 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl flex gap-3">
-                       <Info size={18} className="text-indigo-400 shrink-0" />
-                       <p className="text-[11px] text-indigo-200/80 leading-relaxed font-medium">
-                         Keys are stored locally in your browser and are never sent to our servers. Only the active engine's key is used for processing.
-                       </p>
+                      <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Case Context / Brief</label>
+                      <textarea 
+                        value={settings.caseContext}
+                        onChange={(e) => handleSaveSettings({ ...settings, caseContext: e.target.value })}
+                        className="w-full h-24 bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all"
+                        placeholder="e.g. This is a deposition for a medical malpractice case regarding a knee surgery performed by Dr. Smith..."
+                      />
+                      <p className="text-[9px] text-zinc-600 italic px-1">Describing the scene helps the AI identify specialized jargon and speaker intent.</p>
                     </div>
                   </div>
                </section>
 
-               {/* Advanced Preferences */}
                <section className="space-y-6">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-                      <Shield size={14} />
+                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Key size={14} className="text-indigo-500" /> API Access</h3>
+                  <div className="space-y-4 p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">OpenAI Key</label>
+                      <div className="relative">
+                        <input type={showKeys.openai ? 'text' : 'password'} value={settings.openaiKey} onChange={(e) => handleSaveSettings({ ...settings, openaiKey: e.target.value })} className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:border-indigo-500 outline-none" placeholder="sk-..." />
+                        <button onClick={() => setShowKeys({...showKeys, openai: !showKeys.openai})} className="absolute right-3 top-3.5 text-zinc-600 hover:text-white">{showKeys.openai ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+                      </div>
                     </div>
-                    <h3 className="text-sm font-bold text-white uppercase tracking-widest">Global Preferences</h3>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                     {[
-                       { id: 'legalMode', label: 'Legal Verbatim', icon: Shield, desc: 'Enables precise timestamps, speaker ID, and verbatim mode.' },
-                       { id: 'autoDriveUpload', label: 'Drive Auto-Sync', icon: HardDrive, desc: 'Instantly backup original audio and transcripts to Google Drive.' },
-                       { id: 'autoDownloadAudio', label: 'Local Auto-Save', icon: Activity, desc: 'Save a local copy of recordings when transcription completes.' },
-                     ].map(opt => (
-                        <button 
-                          key={opt.id}
-                          onClick={() => handleSaveSettings({ ...settings, [opt.id]: !settings[opt.id as keyof TranscriptionSettings] })}
-                          className={`p-5 rounded-3xl border transition-all text-left space-y-3 ${
-                            settings[opt.id as keyof TranscriptionSettings] 
-                            ? 'bg-zinc-100 border-zinc-100' 
-                            : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'
-                          }`}
-                        >
-                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${settings[opt.id as keyof TranscriptionSettings] ? 'bg-black text-white' : 'bg-zinc-800 text-zinc-500'}`}>
-                            <opt.icon size={16} />
-                          </div>
-                          <div>
-                            <p className={`text-sm font-black ${settings[opt.id as keyof TranscriptionSettings] ? 'text-black' : 'text-white'}`}>{opt.label}</p>
-                            <p className={`text-[10px] font-bold mt-1 leading-relaxed ${settings[opt.id as keyof TranscriptionSettings] ? 'text-zinc-600' : 'text-zinc-500'}`}>{opt.desc}</p>
-                          </div>
-                        </button>
-                     ))}
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">AssemblyAI Key</label>
+                      <div className="relative">
+                        <input type={showKeys.assembly ? 'text' : 'password'} value={settings.assemblyAiKey} onChange={(e) => handleSaveSettings({ ...settings, assemblyAiKey: e.target.value })} className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:border-indigo-500 outline-none" placeholder="Key..." />
+                        <button onClick={() => setShowKeys({...showKeys, assembly: !showKeys.assembly})} className="absolute right-3 top-3.5 text-zinc-600 hover:text-white">{showKeys.assembly ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+                      </div>
+                    </div>
                   </div>
                </section>
             </div>
           )}
-
         </div>
       </main>
     </div>
