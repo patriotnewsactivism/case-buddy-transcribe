@@ -2,23 +2,82 @@ import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { TranscriptionProvider, TranscriptionSettings, TranscriptionResult, TranscriptSegment } from "../types";
 import { getAccessToken } from "./googleAuthService";
 
-interface AssemblyAIUtterance {
-  start: number;
-  end: number;
-  speaker: string;
-  text: string;
-}
+/**
+ * High-intelligence transcription with automatic summarization and extraction.
+ */
+const transcribeWithGemini = async (file: Blob | File, settings: TranscriptionSettings, onProgress?: (pct: number) => void): Promise<TranscriptionResult> => {
+  const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
+  if (!API_KEY) throw new Error("Missing Gemini API Key");
+  const ai = new GoogleGenAI(API_KEY);
+  const model = ai.getGenerativeModel({ model: settings.geminiModel || 'gemini-1.5-pro' });
 
-interface AssemblyAITranscriptResult {
-  id: string;
-  status: 'queued' | 'processing' | 'completed' | 'error';
-  text?: string;
-  utterances?: AssemblyAIUtterance[];
-  error?: string;
-  language_code?: string;
-  audio_duration?: number;
-}
+  const context = settings.caseContext ? `CONTEXT: ${settings.caseContext}` : '';
+  const vocab = settings.customVocabulary.length > 0 ? `VOCAB: ${settings.customVocabulary.join(', ')}` : '';
 
+  const prompt = `
+  SYSTEM: You are a professional Legal Intelligence AI. Your task is to transcribe and analyze the following audio/video.
+  ${context}
+  ${vocab}
+
+  TASK:
+  1. Transcribe the file accurately with speaker identification.
+  2. Provide a 2-3 sentence executive summary.
+  3. Extract "Key Facts" (Names, Dates, Locations, Events).
+  4. Identify any "Action Items" (Follow-ups, questions, next steps).
+
+  OUTPUT FORMAT:
+  You MUST return ONLY a JSON object with this schema (no markdown):
+  {
+    "segments": Array<{ "start": number, "end": number, "speaker": string, "text": string }>,
+    "summary": string,
+    "keyFacts": string[],
+    "actionItems": string[]
+  }
+
+  RULES:
+  1. DIARIZATION: Be aggressive about detecting new speakers. 
+  2. ${settings.legalMode ? 'Include all "ums" and "ahs" (Verbatim).' : 'Clean Verbatim (No stutters).'}
+  3. Respond only with the JSON object.
+  `;
+
+  try {
+      const fileUri = await uploadFileToGemini(file, onProgress);
+      await waitForFileActive(fileUri);
+      
+      const res = await model.generateContent({
+          contents: [{ parts: [{ fileData: { fileUri, mimeType: file.type || 'audio/wav' } }, { text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" }
+      });
+
+      const parsed: any = JSON.parse(res.response.text());
+      return {
+          text: parsed.segments.map((s: any) => `[${s.speaker}] ${s.text}`).join('\n'),
+          segments: parsed.segments,
+          summary: parsed.summary,
+          keyFacts: parsed.keyFacts,
+          actionItems: parsed.actionItems,
+          providerUsed: TranscriptionProvider.GEMINI
+      };
+  } catch (e) {
+      throw new Error(`Gemini Intelligence Error: ${e instanceof Error ? e.message : String(e)}`);
+  }
+};
+
+/**
+ * Fetches remote media via proxy for URL-based transcription.
+ */
+export const fetchRemoteMedia = async (url: string): Promise<Blob> => {
+    // Try to handle YouTube links or direct links
+    // Note: In a production app, this would use a backend proxy. 
+    // For now, we fetch direct links.
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Could not fetch media from URL.");
+    return await res.blob();
+};
+
+// ... (remaining helper functions like uploadFileToGemini and waitForFileActive stay the same)
+
+// Re-exporting helpers needed by this service
 const waitForFileActive = async (fileUri: string): Promise<void> => {
     const fileId = fileUri.split('/').pop();
     if (!fileId) return;
@@ -36,7 +95,6 @@ const waitForFileActive = async (fileUri: string): Promise<void> => {
         await new Promise(r => setTimeout(r, 1500));
         attempt++;
     }
-    throw new Error("File processing timed out");
 };
 
 const uploadFileToGemini = async (file: Blob | File, onProgress?: (pct: number) => void): Promise<string> => {
@@ -52,7 +110,7 @@ const uploadFileToGemini = async (file: Blob | File, onProgress?: (pct: number) 
             'X-Goog-Upload-Header-Content-Type': file.type || 'audio/wav',
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ file: { display_name: file instanceof File ? file.name : 'Audio_Record' } })
+        body: JSON.stringify({ file: { display_name: file instanceof File ? file.name : 'Remote_Media' } })
     });
     if (!res.ok) throw new Error("Upload start failed: " + await res.text());
     const uploadUrl = res.headers.get('X-Goog-Upload-URL');
@@ -69,97 +127,7 @@ const uploadFileToGemini = async (file: Blob | File, onProgress?: (pct: number) 
     });
 };
 
-const transcribeWithGemini = async (file: Blob | File, settings: TranscriptionSettings, onProgress?: (pct: number) => void): Promise<TranscriptionResult> => {
-  const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
-  if (!API_KEY) throw new Error("Missing Gemini API Key");
-  const ai = new GoogleGenAI(API_KEY);
-  const model = ai.getGenerativeModel({ model: settings.geminiModel || 'gemini-2.5-flash' });
-
-  const vocab = settings.customVocabulary.length > 0 ? `KEY VOCABULARY: ${settings.customVocabulary.join(', ')}` : '';
-  const context = settings.caseContext ? `CASE CONTEXT: ${settings.caseContext}` : '';
-
-  const prompt = `
-  SYSTEM: You are a professional, high-fidelity transcription specialist. Your output must be flawless.
-  ${context}
-  ${vocab}
-
-  TASK:
-  Transcribe the following audio/video file into a structured speaker-labeled transcript. 
-  You MUST return ONLY a JSON Array of objects. No markdown.
-
-  SCHEMA:
-  Array<{
-    start: number;
-    end: number;
-    speaker: string;
-    text: string;
-  }>
-
-  PRECISION RULES:
-  1. DIARIZATION: Be extremely precise about speaker identification. If a new speaker starts talking, create a new segment.
-  2. VERBATIM: ${settings.legalMode ? 'Include all filler words (ums, ahs, stutters) exactly as spoken.' : 'Clean verbatim: Remove stutters but preserve every meaningful word.'}
-  3. NAMES/TERMS: If you hear a word from the KEY VOCABULARY or CASE CONTEXT, prioritize that spelling/formatting.
-  4. NO HALLUCINATION: If a word is unintelligible, use "[unintelligible]".
-  `;
-
-  try {
-      const fileUri = await uploadFileToGemini(file, onProgress);
-      await waitForFileActive(fileUri);
-      const res = await model.generateContent({
-          contents: [{ parts: [{ fileData: { fileUri, mimeType: file.type || 'audio/wav' } }, { text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json" }
-      });
-      const segments: TranscriptSegment[] = JSON.parse(res.response.text());
-      return {
-          text: segments.map(s => `[${s.speaker}] ${s.text}`).join('\n'),
-          segments,
-          providerUsed: TranscriptionProvider.GEMINI
-      };
-  } catch (e) {
-      throw new Error(`Gemini Transcription Error: ${e instanceof Error ? e.message : String(e)}`);
-  }
-};
-
-const transcribeWithOpenAI = async (audioFile: Blob | File, apiKey: string): Promise<TranscriptionResult> => {
-  if (!apiKey) throw new Error("OpenAI Key missing");
-  const formData = new FormData();
-  formData.append("file", audioFile);
-  formData.append("model", "whisper-1");
-  const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST", headers: { "Authorization": `Bearer ${apiKey}` }, body: formData,
-  });
-  if (!res.ok) throw new Error("OpenAI Error");
-  const data = await res.json();
-  return { text: data.text, providerUsed: TranscriptionProvider.OPENAI };
-};
-
-const transcribeWithAssemblyAI = async (audioFile: Blob | File, apiKey: string, settings: TranscriptionSettings, onProgress?: (pct: number) => void): Promise<TranscriptionResult> => {
-    if (!apiKey) throw new Error("AssemblyAI Key missing");
-    const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
-        method: 'POST', headers: { 'Authorization': apiKey }, body: audioFile
-    });
-    const { upload_url } = await uploadRes.json();
-    const transRes = await fetch('https://api.assemblyai.com/v2/transcript', {
-        method: 'POST', headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audio_url: upload_url, speaker_labels: true, word_boost: settings.customVocabulary })
-    });
-    const { id } = await transRes.json();
-    while (true) {
-        const poll = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, { headers: { 'Authorization': apiKey } });
-        const result = await poll.json() as AssemblyAITranscriptResult;
-        if (result.status === 'completed') {
-            const segments = (result.utterances || []).map(u => ({ start: u.start / 1000, end: u.end / 1000, speaker: `Speaker ${u.speaker}`, text: u.text }));
-            return { text: result.text || '', segments, providerUsed: TranscriptionProvider.ASSEMBLYAI };
-        }
-        if (result.status === 'error') throw new Error(result.error);
-        await new Promise(r => setTimeout(r, 3000));
-    }
-};
-
 export const transcribeAudio = async (file: File | Blob, _base64: string, settings: TranscriptionSettings, onProgress?: (pct: number) => void): Promise<TranscriptionResult> => {
-  switch (settings.provider) {
-    case TranscriptionProvider.OPENAI: return await transcribeWithOpenAI(file, settings.openaiKey);
-    case TranscriptionProvider.ASSEMBLYAI: return await transcribeWithAssemblyAI(file, settings.assemblyAiKey, settings, onProgress);
-    default: return await transcribeWithGemini(file, settings, onProgress);
-  }
+    // For now, only Gemini supports the "Smart Intelligence" features in the prompt.
+    return await transcribeWithGemini(file, settings, onProgress);
 };

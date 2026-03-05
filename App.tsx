@@ -4,7 +4,7 @@ import FileUploader from './components/FileUploader';
 import TranscriptionResult from './components/TranscriptionResult';
 import BatchQueue from './components/BatchQueue';
 import { AppMode, TranscriptionStatus, TranscriptionProvider, TranscriptionSettings, BatchItem, GoogleUser } from './types';
-import { transcribeAudio } from './services/transcriptionService';
+import { transcribeAudio, fetchRemoteMedia } from './services/transcriptionService';
 import { processMediaFile } from './utils/audioUtils';
 import { downloadFile, generateFilename, formatTranscriptWithSpeakers } from './utils/fileUtils';
 import { openDrivePicker, uploadToDrive } from './services/driveService';
@@ -12,9 +12,8 @@ import { initGoogleAuth, handleCredentialResponse, signOut as googleSignOut, sig
 import { 
   ArrowLeft, Settings2, Shield, Activity, HardDrive, Cpu, 
   LogOut, Key, Info, ExternalLink,
-  LayoutGrid, ListTodo, Eye, EyeOff, Book
+  LayoutGrid, ListTodo, Eye, EyeOff, Book, Link as LinkIcon, Play
 } from 'lucide-react';
-import Header from './components/Header'; // Assuming we kept a version or integrated it
 
 const DEFAULT_SETTINGS: TranscriptionSettings = {
   provider: TranscriptionProvider.GEMINI,
@@ -35,7 +34,7 @@ const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.UPLOAD);
   const [settings, setSettings] = useState<TranscriptionSettings>(DEFAULT_SETTINGS);
   const [googleUser, setGoogleUser] = useState<GoogleUser | null>(null);
-  const [showKeys, setShowKeys] = useState({ openai: false, assembly: false });
+  const [remoteUrl, setRemoteUrl] = useState('');
   
   const [queue, setQueue] = useState<BatchItem[]>([]);
   const [viewingItemId, setViewingItemId] = useState<string | null>(null);
@@ -80,9 +79,6 @@ const App: React.FC = () => {
     localStorage.setItem('whisper_settings', JSON.stringify(newSet));
   };
 
-  const handleSignOut = () => { googleSignOut(); setGoogleUser(null); };
-  const handleSignIn = () => signIn();
-
   const handleFilesSelect = (files: File[]) => {
     const newItems: BatchItem[] = files.map(file => ({
       id: Math.random().toString(36).substring(7),
@@ -92,18 +88,26 @@ const App: React.FC = () => {
     setMode(AppMode.UPLOAD); 
   };
 
+  const handleUrlSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!remoteUrl) return;
+      const newItem: BatchItem = {
+          id: Math.random().toString(36).substring(7),
+          file: { name: "Remote Media", url: remoteUrl, type: "video/mp4" },
+          status: 'QUEUED', stage: 'Queued', progress: 0
+      };
+      setQueue(prev => [...prev, newItem]);
+      setRemoteUrl('');
+  };
+
   const handleDriveSelect = async () => {
-      if (!googleUser) { alert("Please sign in with Google first."); return; }
-      setDriveLoadingState("Initializing Picker...");
+      if (!googleUser) { alert("Sign in first."); return; }
+      setDriveLoadingState("Initializing...");
       try {
           const files = await openDrivePicker(settings.googleApiKey, (msg) => setDriveLoadingState(msg));
           if (files.length > 0) handleFilesSelect(files);
       } catch (e) { alert(`Drive Error: ${e instanceof Error ? e.message : String(e)}`); } 
       finally { setDriveLoadingState(null); }
-  };
-
-  const updateItem = (id: string, updates: Partial<BatchItem>) => {
-    setQueue(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
   };
 
   useEffect(() => {
@@ -114,15 +118,24 @@ const App: React.FC = () => {
         isProcessingRef.current = true;
         const itemId = nextItem.id;
         try {
-            if (settings.provider === TranscriptionProvider.GEMINI && !googleUser) throw new Error("Google sign-in required for Gemini.");
+            let fileToProcess: Blob;
+            if ('url' in nextItem.file) {
+                updateItem(itemId, { status: 'PROCESSING', stage: 'Fetching Remote Media...', progress: 5 });
+                fileToProcess = await fetchRemoteMedia(nextItem.file.url);
+            } else {
+                fileToProcess = nextItem.file;
+            }
+
             const skipConversion = settings.provider === TranscriptionProvider.GEMINI;
-            updateItem(itemId, { status: 'PROCESSING', stage: skipConversion ? 'Uploading...' : 'FFmpeg Extraction...', progress: 5 });
-            const processedFile = await processMediaFile(nextItem.file, skipConversion, (pct) => {
-                if (!skipConversion) updateItem(itemId, { stage: `FFmpeg (${pct}%)`, progress: 5 + Math.round(pct * 0.1) });
+            updateItem(itemId, { status: 'PROCESSING', stage: skipConversion ? 'Analyzing Content...' : 'Scraping Audio (FFmpeg)...', progress: 10 });
+            
+            const processedFile = await processMediaFile(fileToProcess as any, skipConversion, (pct) => {
+                if (!skipConversion) updateItem(itemId, { stage: `Scraping Audio (${pct}%)`, progress: 10 + Math.round(pct * 0.1) });
             });
-            updateItem(itemId, { stage: 'AI Transcription...', progress: 15 });
+
+            updateItem(itemId, { stage: 'AI Transcription...', progress: 20 });
             const result = await transcribeAudio(processedFile, '', settings, (pct) => {
-                updateItem(itemId, { stage: pct === 100 ? 'Analyzing...' : `Processing (${pct}%)`, progress: 15 + Math.round(pct * 0.75) });
+                updateItem(itemId, { stage: pct === 100 ? 'Finalizing Intelligence...' : `Processing (${pct}%)`, progress: 20 + Math.round(pct * 0.75) });
             });
             updateItem(itemId, { status: 'COMPLETED', progress: 100, result: result });
         } catch (error) {
@@ -135,6 +148,10 @@ const App: React.FC = () => {
     processNext();
   }, [queue, settings, processCounter, googleUser]);
 
+  const updateItem = (id: string, updates: Partial<BatchItem>) => {
+    setQueue(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
+  };
+
   const viewingItem = viewingItemId ? queue.find(i => i.id === viewingItemId) : null;
 
   return (
@@ -142,12 +159,10 @@ const App: React.FC = () => {
       <aside className="w-80 border-r border-zinc-800 flex flex-col bg-zinc-950">
         <div className="p-6">
            <div className="flex items-center gap-3 mb-8">
-              <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-2xl shadow-indigo-500/30">
-                <Activity size={22} />
-              </div>
+              <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-2xl shadow-indigo-500/30"><Activity size={22} /></div>
               <div>
                 <h1 className="text-lg font-bold text-white tracking-tight">CaseBuddy</h1>
-                <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest leading-none">Intelligence Engine</p>
+                <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest leading-none text-nowrap">Intelligence Engine</p>
               </div>
            </div>
 
@@ -157,11 +172,11 @@ const App: React.FC = () => {
                     <img src={googleUser.picture} className="w-10 h-10 rounded-full border border-zinc-700" alt="" />
                     <div className="flex-1 overflow-hidden">
                       <p className="text-sm font-bold text-white truncate">{googleUser.name}</p>
-                      <button onClick={handleSignOut} className="text-[10px] text-zinc-500 hover:text-red-400 font-bold flex items-center gap-1 mt-0.5 uppercase">DISCONNECT</button>
+                      <button onClick={() => { googleSignOut(); setGoogleUser(null); }} className="text-[10px] text-zinc-500 hover:text-red-400 font-bold uppercase mt-0.5">DISCONNECT</button>
                     </div>
                   </div>
               ) : (
-                  <button onClick={handleSignIn} className="w-full py-2 bg-white text-black text-xs font-black rounded-lg hover:bg-zinc-200 transition-all">SIGN IN WITH GOOGLE</button>
+                  <button onClick={() => signIn()} className="w-full py-2 bg-white text-black text-xs font-black rounded-lg hover:bg-zinc-200 transition-all uppercase">SIGN IN WITH GOOGLE</button>
               )}
            </div>
 
@@ -190,16 +205,12 @@ const App: React.FC = () => {
            <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.2em] px-1">Engine Status</h3>
            <div className="space-y-3 px-1">
               <div className="flex items-center justify-between group">
-                <span className="text-xs font-bold text-zinc-500">Gemini Pro</span>
-                <div className={`w-2 h-2 rounded-full ${googleUser ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500'}`} />
+                <span className="text-xs font-bold text-zinc-500">Gemini 1.5 Pro</span>
+                <div className={`w-2 h-2 rounded-full ${googleUser ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500 animate-pulse'}`} />
               </div>
               <div className="flex items-center justify-between group">
-                <span className="text-xs font-bold text-zinc-500">Whisper</span>
-                <div className={`w-2 h-2 rounded-full ${settings.openaiKey ? 'bg-green-500' : 'bg-zinc-700'}`} />
-              </div>
-              <div className="flex items-center justify-between group">
-                <span className="text-xs font-bold text-zinc-500">AssemblyAI</span>
-                <div className={`w-2 h-2 rounded-full ${settings.assemblyAiKey ? 'bg-green-500' : 'bg-zinc-700'}`} />
+                <span className="text-xs font-bold text-zinc-500">FFmpeg Scraper</span>
+                <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]" />
               </div>
            </div>
         </div>
@@ -207,20 +218,19 @@ const App: React.FC = () => {
 
       <main className="flex-1 flex flex-col bg-black relative">
         <header className="h-20 border-b border-zinc-900 flex items-center justify-between px-10 bg-black/50 backdrop-blur-xl sticky top-0 z-40">
-           <div>
-              <h2 className="text-xl font-black text-white tracking-tight">
-                {activeTab === 'TRANSCRIPTION' ? 'Workbench' : activeTab === 'SETTINGS' ? 'Configuration' : 'Batch Processor'}
-              </h2>
-           </div>
+           <h2 className="text-xl font-black text-white tracking-tight italic underline">
+             {activeTab === 'TRANSCRIPTION' ? 'Advanced Workbench' : activeTab === 'SETTINGS' ? 'Engine Parameters' : 'Batch Processor'}
+           </h2>
            
            <div className="flex items-center gap-4">
               {activeTab === 'TRANSCRIPTION' && !viewingItemId && (
                 <div className="flex bg-zinc-900 rounded-xl p-1 border border-zinc-800">
-                  <button onClick={() => setMode(AppMode.UPLOAD)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.UPLOAD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Upload</button>
-                  <button onClick={() => setMode(AppMode.RECORD)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.RECORD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Record</button>
+                  <button onClick={() => setMode(AppMode.UPLOAD)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.UPLOAD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Local File</button>
+                  <button onClick={() => setMode(AppMode.URL)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.URL ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Remote Link</button>
+                  <button onClick={() => setMode(AppMode.RECORD)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.RECORD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Live Record</button>
                 </div>
               )}
-              {viewingItemId && <button onClick={() => setViewingItemId(null)} className="px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-all text-xs font-bold">Back to Workbench</button>}
+              {viewingItemId && <button onClick={() => setViewingItemId(null)} className="px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-all text-xs font-bold flex items-center gap-2 uppercase"><ArrowLeft size={14} /> Back</button>}
            </div>
         </header>
 
@@ -228,87 +238,66 @@ const App: React.FC = () => {
           {activeTab === 'TRANSCRIPTION' && (
             <div className="max-w-4xl mx-auto w-full">
               {viewingItem && viewingItem.result ? (
-                  <TranscriptionResult result={viewingItem.result} audioFile={viewingItem.file} onTeachAi={(p) => handleSaveSettings({ ...settings, customVocabulary: [...settings.customVocabulary, p]})} />
+                  <TranscriptionResult result={viewingItem.result} audioFile={viewingItem.file as any} />
               ) : queue.length > 0 && !viewingItemId ? (
                   <BatchQueue queue={queue} onViewResult={(item) => setViewingItemId(item.id)} onDownloadAll={() => {}} />
               ) : (
                   <div className="flex flex-col items-center justify-center min-h-[50vh] text-center">
-                    <h2 className="text-3xl font-black text-white mb-4 tracking-tighter italic underline">Scrape Audio from Video</h2>
-                    <p className="text-zinc-500 max-w-lg mb-10 font-medium leading-relaxed">High-performance FFmpeg extraction. Select an engine and context for maximum accuracy.</p>
-                    <div className="w-full max-w-xl"><FileUploader onFilesSelect={handleFilesSelect} onDriveSelect={handleDriveSelect} driveLoadingState={driveLoadingState} /></div>
+                    <div className="w-16 h-16 rounded-3xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center text-indigo-500 mb-8"><Cpu size={32} /></div>
+                    <h2 className="text-3xl font-black text-white mb-4 tracking-tighter">Ready for Analysis.</h2>
+                    
+                    <div className="w-full max-w-xl">
+                       {mode === AppMode.URL ? (
+                          <form onSubmit={handleUrlSubmit} className="space-y-4 animate-in fade-in duration-500">
+                             <div className="relative">
+                                <LinkIcon size={18} className="absolute left-4 top-4 text-zinc-500" />
+                                <input 
+                                  type="url" 
+                                  placeholder="Paste YouTube or Media URL..."
+                                  value={remoteUrl}
+                                  onChange={(e) => setRemoteUrl(e.target.value)}
+                                  className="w-full bg-zinc-900 border-2 border-zinc-800 rounded-2xl py-4 pl-12 pr-4 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all shadow-2xl"
+                                />
+                             </div>
+                             <button type="submit" className="w-full py-4 bg-indigo-600 text-white font-black rounded-2xl hover:bg-indigo-500 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 uppercase tracking-widest"><Play size={18} /> Fetch & Process</button>
+                          </form>
+                       ) : (
+                          <FileUploader onFilesSelect={handleFilesSelect} onDriveSelect={handleDriveSelect} driveLoadingState={driveLoadingState} />
+                       )}
+                    </div>
                   </div>
               )}
+            </div>
+          )}
+
+          {activeTab === 'HISTORY' && (
+            <div className="max-w-4xl mx-auto w-full">
+               <BatchQueue queue={queue} onViewResult={(item) => { setViewingItemId(item.id); setActiveTab('TRANSCRIPTION'); }} onDownloadAll={() => {}} />
             </div>
           )}
 
           {activeTab === 'SETTINGS' && (
             <div className="max-w-2xl mx-auto w-full space-y-12 animate-in fade-in duration-500">
                <section className="space-y-6">
-                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Cpu size={14} className="text-indigo-500" /> Intelligence Engine</h3>
-                  <div className="grid grid-cols-3 gap-3">
-                    {[
-                      { id: TranscriptionProvider.GEMINI, label: 'Gemini', note: 'Native Video' },
-                      { id: TranscriptionProvider.OPENAI, label: 'Whisper', note: 'General Audio' },
-                      { id: TranscriptionProvider.ASSEMBLYAI, label: 'AssemblyAI', note: 'High Stakes' },
-                    ].map(p => (
-                      <button key={p.id} onClick={() => handleSaveSettings({ ...settings, provider: p.id })} className={`p-4 rounded-2xl border transition-all text-left ${settings.provider === p.id ? 'bg-white border-white' : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'}`}>
-                        <p className={`text-sm font-black ${settings.provider === p.id ? 'text-black' : 'text-white'}`}>{p.label}</p>
-                        <p className={`text-[10px] font-bold mt-1 ${settings.provider === p.id ? 'text-zinc-600' : 'text-zinc-500'}`}>{p.note}</p>
-                      </button>
-                    ))}
-                  </div>
-
-                  {settings.provider === TranscriptionProvider.GEMINI && (
-                     <div className="space-y-4 animate-in slide-in-from-top-2 duration-300">
-                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Gemini Model (Accuracy Tier)</label>
-                        <div className="grid grid-cols-2 gap-2">
-                           {[
-                             { id: 'gemini-1.5-pro', label: '1.5 Pro', desc: 'Max Accuracy (Legal/Complex)' },
-                             { id: 'gemini-2.5-flash', label: '2.5 Flash', desc: 'Fast & Efficient' },
-                           ].map(m => (
-                             <button key={m.id} onClick={() => handleSaveSettings({ ...settings, geminiModel: m.id as any })} className={`p-3 rounded-xl border text-left transition-all ${settings.geminiModel === m.id ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-black border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}>
-                                <p className="text-xs font-black">{m.label}</p>
-                                <p className="text-[9px] font-bold opacity-70">{m.desc}</p>
-                             </button>
-                           ))}
-                        </div>
-                     </div>
-                  )}
-               </section>
-
-               <section className="space-y-6">
-                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Book size={14} className="text-indigo-500" /> Accuracy Context</h3>
-                  <div className="space-y-4 p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Case Context / Brief</label>
-                      <textarea 
-                        value={settings.caseContext}
-                        onChange={(e) => handleSaveSettings({ ...settings, caseContext: e.target.value })}
-                        className="w-full h-24 bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all"
-                        placeholder="e.g. This is a deposition for a medical malpractice case regarding a knee surgery performed by Dr. Smith..."
-                      />
-                      <p className="text-[9px] text-zinc-600 italic px-1">Describing the scene helps the AI identify specialized jargon and speaker intent.</p>
-                    </div>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Cpu size={14} className="text-indigo-500" /> Engine Selection</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                     {[
+                       { id: 'gemini-1.5-pro', label: '1.5 Pro', desc: 'Maximum Intelligence' },
+                       { id: 'gemini-2.5-flash', label: '2.5 Flash', desc: 'Highest Speed' },
+                     ].map(m => (
+                       <button key={m.id} onClick={() => handleSaveSettings({ ...settings, geminiModel: m.id as any })} className={`p-5 rounded-3xl border transition-all text-left relative overflow-hidden ${settings.geminiModel === m.id ? 'bg-white border-white' : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'}`}>
+                          <p className={`text-sm font-black ${settings.geminiModel === m.id ? 'text-black' : 'text-white'}`}>{m.label}</p>
+                          <p className={`text-[10px] font-bold mt-1 ${settings.geminiModel === m.id ? 'text-zinc-600' : 'text-zinc-500'}`}>{m.desc}</p>
+                       </button>
+                     ))}
                   </div>
                </section>
 
                <section className="space-y-6">
-                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Key size={14} className="text-indigo-500" /> API Access</h3>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Book size={14} className="text-indigo-500" /> Intelligence Context</h3>
                   <div className="space-y-4 p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">OpenAI Key</label>
-                      <div className="relative">
-                        <input type={showKeys.openai ? 'text' : 'password'} value={settings.openaiKey} onChange={(e) => handleSaveSettings({ ...settings, openaiKey: e.target.value })} className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:border-indigo-500 outline-none" placeholder="sk-..." />
-                        <button onClick={() => setShowKeys({...showKeys, openai: !showKeys.openai})} className="absolute right-3 top-3.5 text-zinc-600 hover:text-white">{showKeys.openai ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">AssemblyAI Key</label>
-                      <div className="relative">
-                        <input type={showKeys.assembly ? 'text' : 'password'} value={settings.assemblyAiKey} onChange={(e) => handleSaveSettings({ ...settings, assemblyAiKey: e.target.value })} className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white focus:border-indigo-500 outline-none" placeholder="Key..." />
-                        <button onClick={() => setShowKeys({...showKeys, assembly: !showKeys.assembly})} className="absolute right-3 top-3.5 text-zinc-600 hover:text-white">{showKeys.assembly ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-                      </div>
-                    </div>
+                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Case Brief / Transcription Context</label>
+                    <textarea value={settings.caseContext} onChange={(e) => handleSaveSettings({ ...settings, caseContext: e.target.value })} className="w-full h-32 bg-black border border-zinc-800 rounded-2xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all" placeholder="Provide background info to help the AI identify jargon and speaker intent..." />
                   </div>
                </section>
             </div>

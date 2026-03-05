@@ -1,6 +1,7 @@
 export enum AppMode {
   UPLOAD = 'UPLOAD',
   RECORD = 'RECORD',
+  URL = 'URL', // New: Support for remote links
 }
 
 export enum TranscriptionStatus {
@@ -22,8 +23,8 @@ export interface TranscriptionSettings {
   assemblyAiKey: string;
   googleClientId: string;
   googleApiKey: string;
-  geminiModel: 'gemini-1.5-pro' | 'gemini-1.5-flash' | 'gemini-2.0-flash' | 'gemini-2.5-flash'; // New: Model Choice
-  caseContext: string; // New: Provide context for the AI
+  geminiModel: 'gemini-1.5-pro' | 'gemini-1.5-flash' | 'gemini-2.0-flash' | 'gemini-2.5-flash';
+  caseContext: string;
   legalMode: boolean;
   autoDownloadAudio: boolean;
   autoDriveUpload: boolean;
@@ -40,14 +41,16 @@ export interface TranscriptSegment {
 export interface TranscriptionResult {
   text: string;
   segments?: TranscriptSegment[];
-  summary?: string;
+  summary?: string;      // New: AI-generated case summary
+  keyFacts?: string[];   // New: Key entities/facts extracted
+  actionItems?: string[]; // New: Extracted next steps
   detectedLanguage?: string;
   providerUsed: TranscriptionProvider;
 }
 
 export interface BatchItem {
   id: string;
-  file: File;
+  file: File | { name: string; url: string; type: string }; // Support for remote files
   status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'ERROR';
   stage: string;
   progress: number;
@@ -56,7 +59,7 @@ export interface BatchItem {
 }
 
 export interface AudioFile {
-  file: File | Blob;
+  file: File | Blob | string;
   name: string;
   type: string;
   duration?: number;
