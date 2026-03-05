@@ -13,7 +13,7 @@ import { initGoogleAuth, handleCredentialResponse, signOut as googleSignOut, sig
 import { 
   ArrowLeft, Settings2, Shield, Activity, HardDrive, Cpu, 
   LogOut, Key, Info, ExternalLink,
-  LayoutGrid, ListTodo, Eye, EyeOff, Book, Link as LinkIcon, Play
+  LayoutGrid, ListTodo, Eye, EyeOff, Book, Link as LinkIcon, Play, AlertCircle
 } from 'lucide-react';
 
 const DEFAULT_SETTINGS: TranscriptionSettings = {
@@ -36,6 +36,7 @@ const App: React.FC = () => {
   const [settings, setSettings] = useState<TranscriptionSettings>(DEFAULT_SETTINGS);
   const [googleUser, setGoogleUser] = useState<GoogleUser | null>(null);
   const [remoteUrl, setRemoteUrl] = useState('');
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   
   const [queue, setQueue] = useState<BatchItem[]>([]);
   const [viewingItemId, setViewingItemId] = useState<string | null>(null);
@@ -89,6 +90,11 @@ const App: React.FC = () => {
     setMode(AppMode.UPLOAD); 
   };
 
+  const handleRecordingComplete = (blob: Blob) => {
+    const file = new File([blob], `Recording_${new Date().toISOString()}.webm`, { type: 'audio/webm' });
+    handleFilesSelect([file]);
+  };
+
   const handleUrlSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
       if (!remoteUrl) return;
@@ -140,6 +146,7 @@ const App: React.FC = () => {
             });
             updateItem(itemId, { status: 'COMPLETED', progress: 100, result: result });
         } catch (error) {
+            console.error("Transcription pipeline error:", error);
             updateItem(itemId, { status: 'ERROR', error: error instanceof Error ? error.message : 'Failed' });
         } finally {
             isProcessingRef.current = false;
@@ -262,6 +269,10 @@ const App: React.FC = () => {
                              </div>
                              <button type="submit" className="w-full py-4 bg-indigo-600 text-white font-black rounded-2xl hover:bg-indigo-500 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 uppercase tracking-widest"><Play size={18} /> Fetch & Process</button>
                           </form>
+                       ) : mode === AppMode.RECORD ? (
+                          <div className="animate-in fade-in duration-500">
+                             <AudioRecorder onRecordingComplete={handleRecordingComplete} status={TranscriptionStatus.IDLE} autoDownload={settings.autoDownloadAudio} />
+                          </div>
                        ) : (
                           <FileUploader onFilesSelect={handleFilesSelect} onDriveSelect={handleDriveSelect} driveLoadingState={driveLoadingState} />
                        )}
