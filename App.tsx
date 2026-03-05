@@ -1,3 +1,4 @@
+// CaseBuddy Intelligence Engine
 import React, { useState, useEffect, useRef } from 'react';
 import AudioRecorder from './components/AudioRecorder';
 import FileUploader from './components/FileUploader';
