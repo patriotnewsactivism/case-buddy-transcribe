@@ -104,37 +104,4 @@ export interface VoiceProfile {
   usageCount: number;
   aliases?: string[];
 }
-  file: File | { name: string; url: string; type: string; size?: number };
-  status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'ERROR';
-  stage: string;
-  progress: number;
-  progressInfo?: ProgressInfo;
-  result?: TranscriptionResult;
-  error?: string;
-  startedAt?: number;
-  completedAt?: number;
-  retryCount?: number;
-}
-
-export interface AudioFile {
-  file: File | Blob | string;
-  name: string;
-  type: string;
-  duration?: number;
-}
-
-export interface GoogleUser {
-  email: string;
-  name: string;
-  picture: string;
-}
-
-export interface VoiceProfile {
-  id: string;
-  name: string;
-  createdAt: string;
-  lastUsed: string;
-  usageCount: number;
-  aliases?: string[];
-}
 

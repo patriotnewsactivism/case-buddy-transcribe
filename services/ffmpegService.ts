@@ -10,7 +10,7 @@ const loadFFmpeg = async (): Promise<void> => {
         const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
         await ffmpeg.load({
             coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-            wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm", "application/wasm"),
+            wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
         });
     }
 };
@@ -67,40 +67,6 @@ export const extractAudio = async (file: File, onProgress?: (pct: number) => voi
  */
 export const processWithFFmpeg = async (file: File, onProgress?: (pct: number) => void): Promise<Blob> => {
     try {
-        // Check if FFmpeg is available
-        if (typeof FFmpeg === 'undefined') {
-            throw new Error('FFmpeg not available in this browser');
-        }
-        
-        if (onProgress) onProgress(0);
-        const processedBlob = await extractAudio(file, onProgress);
-        return processedBlob;
-    } catch (ffmpegError) {
-        console.warn("FFmpeg processing failed for large file, falling back to original file:", ffmpegError);
-        
-        // For very large files that can't be processed, return the original
-        // This ensures the transcription service can still work
-        return file;
-    }
-};
-    try {
-        // Check if FFmpeg is available
-        if (typeof FFmpeg === 'undefined') {
-            throw new Error('FFmpeg not available in this browser');
-        }
-        
-        if (onProgress) onProgress(0);
-        const processedBlob = await extractAudio(file, onProgress);
-        return processedBlob;
-    } catch (ffmpegError) {
-        console.warn("FFmpeg processing failed for large file, falling back to original file:", ffmpegError);
-        
-        // For very large files that can't be processed, return the original
-        // This ensures the transcription service can still work
-        return file;
-    }
-};
-
         // Check if FFmpeg is available
         if (typeof FFmpeg === 'undefined') {
             throw new Error('FFmpeg not available in this browser');
