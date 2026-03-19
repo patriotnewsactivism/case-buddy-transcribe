@@ -32,6 +32,17 @@ steps:
 substitutions:
   _API_KEY: 'CHANGE_ME_IN_TRIGGER_SETTINGS'
 
+# Secret environment variables (for production API keys)
+secrets:
+  - kmsKeyName: projects/your-project/locations/global/keyRings/your-key-ring/cryptoKeys/your-key
+    secretEnv:
+      API_KEY: projects/your-project/secrets/gemini-api-key/versions/latest
+
+images:
+  - 'gcr.io/$PROJECT_ID/gemini-whisper'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
 images:
   - 'gcr.io/$PROJECT_ID/gemini-whisper'
 

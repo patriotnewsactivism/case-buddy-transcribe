@@ -15,6 +15,9 @@ COPY . .
 ARG API_KEY
 ENV API_KEY=${API_KEY}
 
+# Also set environment variable for runtime
+ENV VITE_GEMINI_API_KEY=${API_KEY}
+
 RUN npm run build
 
 # Production stage
@@ -29,3 +32,6 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 EXPOSE 8080
 
 CMD ["nginx", "-g", "daemon off;"]
+
+CMD ["nginx", "-g", "daemon off;"]
+
