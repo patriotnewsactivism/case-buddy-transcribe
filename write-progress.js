@@ -27,6 +27,8 @@ interface ProgressInfo {
   stageProgress: number;
   overallProgress: number;
   message: string;
+  timeElapsed: number;
+  estimatedTimeRemaining?: number;
   bytesProcessed?: number;
   bytesTotal?: number;
 }
