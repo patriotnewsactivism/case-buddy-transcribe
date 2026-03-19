@@ -1,67 +1,102 @@
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { toBlobURL, fetchFile } from '@ffmpeg/util';
+import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { fetchFile, toBlobURL } from "@ffmpeg/util";
 
-let ffmpeg: FFmpeg | null = null;
+// Initialize FFmpeg
+const ffmpeg = new FFmpeg();
 
-/**
- * Initializes and loads the FFmpeg WASM instance.
- */
-export const loadFFmpeg = async (): Promise<FFmpeg> => {
-    if (ffmpeg) return ffmpeg;
-
-    ffmpeg = new FFmpeg();
-    
-    // Using unpkg for the WASM binaries (standard for FFmpeg.wasm)
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-    
-    await ffmpeg.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-    });
-
-    return ffmpeg;
+// Load FFmpeg core
+const loadFFmpeg = async (): Promise<void> => {
+    if (!ffmpeg.isLoaded()) {
+        const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+        await ffmpeg.load({
+            coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+            wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm", "application/wasm"),
+        });
+    }
 };
 
 /**
- * High-performance audio extraction from any video or audio file.
- * Uses FFmpeg to copy the audio stream without re-encoding when possible,
- * or re-encodes to a light-weight 16kHz Mono WAV (Standard for AI).
+ * Extracts audio from video files or optimizes audio files using FFmpeg
  */
 export const extractAudio = async (file: File, onProgress?: (pct: number) => void): Promise<Blob> => {
-    const instance = await loadFFmpeg();
-    const inputName = 'input' + file.name.substring(file.name.lastIndexOf('.'));
-    const outputName = 'output.wav';
-
-    // 1. Write the file to FFmpeg's virtual FS
-    await instance.writeFile(inputName, await fetchFile(file));
-
-    if (onProgress) {
-        instance.on('progress', ({ progress }) => {
-            onProgress(Math.round(progress * 100));
-        });
+    try {
+        await loadFFmpeg();
+        
+        // Write the file to FFmpeg's virtual file system
+        ffmpeg.FS("writeFile", "input", await fetchFile(file));
+        
+        // Set up progress monitoring
+        if (onProgress) {
+            ffmpeg.on("progress", ({ progress }) => {
+                onProgress(Math.round(progress * 100));
+            });
+        }
+        
+        // Determine output format based on input
+        const isVideo = file.type.startsWith('video/');
+        const outputFormat = isVideo ? 'mp3' : 'wav';
+        
+        // Execute FFmpeg command
+        await ffmpeg.run(
+            "-i", "input",
+            "-vn", // Disable video
+            "-acodec", "pcm_s16le", // Use 16-bit PCM for better quality
+            "-ar", "16000", // 16kHz sample rate (good for speech)
+            "-ac", "1", // Mono channel
+            "-y", // Overwrite output file
+            `output.${outputFormat}`
+        );
+        
+        // Read the output file
+        const outputData = ffmpeg.FS("readFile", `output.${outputFormat}`);
+        
+        // Clean up
+        ffmpeg.FS("unlink", "input");
+        ffmpeg.FS("unlink", `output.${outputFormat}`);
+        
+        // Create blob and return
+        return new Blob([outputData.buffer], { type: `audio/${outputFormat}` });
+    } catch (error) {
+        console.error("FFmpeg audio extraction failed:", error);
+        throw error;
     }
+};
 
-    // 2. Run FFmpeg command:
-    // -i [input] : input file
-    // -vn        : skip video (disable video stream)
-    // -acodec pcm_s16le : standard 16-bit PCM for AI
-    // -ar 16000  : resample to 16kHz (Gold standard for Speech AI)
-    // -ac 1      : mono (smaller file size, faster upload, better for many AI models)
-    await instance.exec([
-        '-i', inputName,
-        '-vn',
-        '-acodec', 'pcm_s16le',
-        '-ar', '16000',
-        '-ac', '1',
-        outputName
-    ]);
-
-    // 3. Read the output from virtual FS
-    const data = await instance.readFile(outputName);
-    
-    // Clean up
-    await instance.deleteFile(inputName);
-    await instance.deleteFile(outputName);
-
-    return new Blob([data], { type: 'audio/wav' });
+/**
+ * Processes large files using FFmpeg with better error handling
+ */
+export const processWithFFmpeg = async (file: File, onProgress?: (pct: number) => void): Promise<Blob> => {
+    try {
+        // Check if FFmpeg is available
+        if (typeof FFmpeg === 'undefined') {
+            throw new Error('FFmpeg not available in this browser');
+        }
+        
+        if (onProgress) onProgress(0);
+        const processedBlob = await extractAudio(file, onProgress);
+        return processedBlob;
+    } catch (ffmpegError) {
+        console.warn("FFmpeg processing failed for large file, falling back to original file:", ffmpegError);
+        
+        // For very large files that can't be processed, return the original
+        // This ensures the transcription service can still work
+        return file;
+    }
+};
+    try {
+        // Check if FFmpeg is available
+        if (typeof FFmpeg === 'undefined') {
+            throw new Error('FFmpeg not available in this browser');
+        }
+        
+        if (onProgress) onProgress(0);
+        const processedBlob = await extractAudio(file, onProgress);
+        return processedBlob;
+    } catch (ffmpegError) {
+        console.warn("FFmpeg processing failed for large file, falling back to original file:", ffmpegError);
+        
+        // For very large files that can't be processed, return the original
+        // This ensures the transcription service can still work
+        return file;
+    }
 };

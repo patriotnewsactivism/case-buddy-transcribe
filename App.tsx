@@ -21,8 +21,8 @@ const DEFAULT_SETTINGS: TranscriptionSettings = {
   openaiKey: '',
   assemblyAiKey: import.meta.env.VITE_ASSEMBLYAI_API_KEY || '',
   googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
-  googleApiKey: import.meta.env.VITE_GEMINI_API_KEY || '', 
-  geminiModel: 'gemini-1.5-pro',
+  googleApiKey: import.meta.env.VITE_GEMINI_API_KEY || '',
+  geminiModel: 'gemini-2.5-flash', // Changed to cheaper model
   caseContext: '',
   legalMode: true,
   autoDownloadAudio: false,
