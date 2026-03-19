@@ -100,3 +100,20 @@ export const processWithFFmpeg = async (file: File, onProgress?: (pct: number) =
         return file;
     }
 };
+
+        // Check if FFmpeg is available
+        if (typeof FFmpeg === 'undefined') {
+            throw new Error('FFmpeg not available in this browser');
+        }
+        
+        if (onProgress) onProgress(0);
+        const processedBlob = await extractAudio(file, onProgress);
+        return processedBlob;
+    } catch (ffmpegError) {
+        console.warn("FFmpeg processing failed for large file, falling back to original file:", ffmpegError);
+        
+        // For very large files that can't be processed, return the original
+        // This ensures the transcription service can still work
+        return file;
+    }
+};
