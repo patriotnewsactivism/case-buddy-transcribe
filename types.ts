@@ -1,7 +1,7 @@
-
 export enum AppMode {
   UPLOAD = 'UPLOAD',
   RECORD = 'RECORD',
+  URL = 'URL', // New: Support for remote links
 }
 
 export enum TranscriptionStatus {
@@ -21,42 +21,52 @@ export interface TranscriptionSettings {
   provider: TranscriptionProvider;
   openaiKey: string;
   assemblyAiKey: string;
-  googleClientId: string; // New: For Google Drive Integration
-  googleApiKey: string;   // New: Required for Picker API (Project-specific)
-  legalMode: boolean; // Enables verbatim, timestamps, and speaker ID
-  autoDownloadAudio: boolean; // New: Auto-save audio on stop
-  autoDriveUpload: boolean; // New: Auto-upload to Google Drive
-  customVocabulary: string[]; // New: List of words/phrases to teach the AI
+  googleClientId: string;
+  googleApiKey: string;
+  geminiModel: 'gemini-1.5-pro' | 'gemini-1.5-flash' | 'gemini-2.0-flash' | 'gemini-2.5-flash';
+  caseContext: string;
+  legalMode: boolean;
+  autoDownloadAudio: boolean;
+  autoDriveUpload: boolean;
+  customVocabulary: string[];
 }
 
 export interface TranscriptSegment {
-  start: number; // Start time in seconds
-  end: number;   // End time in seconds
+  start: number;
+  end: number;
   speaker: string;
   text: string;
 }
 
 export interface TranscriptionResult {
-  text: string; // Fallback plain text
-  segments?: TranscriptSegment[]; // Structured data for click-to-play
-  summary?: string;
+  text: string;
+  segments?: TranscriptSegment[];
+  summary?: string;      // New: AI-generated case summary
+  keyFacts?: string[];   // New: Key entities/facts extracted
+  actionItems?: string[]; // New: Extracted next steps
   detectedLanguage?: string;
   providerUsed: TranscriptionProvider;
 }
 
 export interface BatchItem {
   id: string;
-  file: File;
+  file: File | { name: string; url: string; type: string }; // Support for remote files
   status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'ERROR';
-  stage: string; // e.g. "Extracting Audio", "Uploading"
+  stage: string;
   progress: number;
-  result?: TranscriptionResult; // Changed from 'transcript' string to object
+  result?: TranscriptionResult;
   error?: string;
 }
 
 export interface AudioFile {
-  file: File | Blob;
+  file: File | Blob | string;
   name: string;
   type: string;
   duration?: number;
+}
+
+export interface GoogleUser {
+  email: string;
+  name: string;
+  picture: string;
 }

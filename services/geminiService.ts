@@ -1,8 +1,9 @@
 import { GoogleGenAI } from "@google/genai";
 
 const getAiClient = () => {
-  // The API key must be obtained exclusively from the environment variable process.env.API_KEY.
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) throw new Error("Gemini API key not configured");
+  return new GoogleGenAI({ apiKey });
 };
 
 export const summarizeText = async (text: string): Promise<string> => {
