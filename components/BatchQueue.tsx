@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { BatchItem } from '../types';
 import { FileAudio, FileVideo, CheckCircle2, Loader2, AlertCircle, Clock, Eye, Download } from 'lucide-react';
 
@@ -9,6 +9,7 @@ interface BatchQueueProps {
 }
 
 const BatchQueue: React.FC<BatchQueueProps> = ({ queue, onViewResult, onDownloadAll }) => {
+  const [expandedErrorId, setExpandedErrorId] = useState<string | null>(null);
   const completedCount = queue.filter(i => i.status === 'COMPLETED').length;
   const progressPercent = Math.round((completedCount / queue.length) * 100);
 
@@ -116,9 +117,14 @@ const BatchQueue: React.FC<BatchQueueProps> = ({ queue, onViewResult, onDownload
                         )}
 
                         {item.status === 'ERROR' && (
-                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 text-xs font-medium" title={item.error}>
+                            <button
+                                type="button"
+                                onClick={() => setExpandedErrorId(prev => prev === item.id ? null : item.id)}
+                                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 text-xs font-medium"
+                                title={item.error}
+                            >
                                 <AlertCircle size={14} /> Failed
-                            </div>
+                            </button>
                         )}
 
                         {item.status === 'COMPLETED' && (
@@ -131,6 +137,12 @@ const BatchQueue: React.FC<BatchQueueProps> = ({ queue, onViewResult, onDownload
                         )}
                     </div>
                 </div>
+
+                {item.status === 'ERROR' && expandedErrorId === item.id && (
+                    <div className="mt-3 p-3 rounded-lg bg-red-500/5 border border-red-500/20 text-xs text-red-300 break-words">
+                        {item.error || 'Unknown error'}
+                    </div>
+                )}
             </div>
         ))}
       </div>
