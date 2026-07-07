@@ -13,6 +13,7 @@ export enum TranscriptionStatus {
 
 export enum TranscriptionProvider {
   DEEPGRAM = 'DEEPGRAM',
+  GROQ = 'GROQ',
   GEMINI = 'GEMINI',
   OPENAI = 'OPENAI',
   ASSEMBLYAI = 'ASSEMBLYAI',
@@ -21,6 +22,7 @@ export enum TranscriptionProvider {
 export interface TranscriptionSettings {
   provider: TranscriptionProvider;
   deepgramKey: string;
+  groqKey: string;
   openaiKey: string;
   assemblyAiKey: string;
   googleClientId: string;

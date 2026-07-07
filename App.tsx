@@ -19,6 +19,7 @@ import {
 const DEFAULT_SETTINGS: TranscriptionSettings = {
   provider: TranscriptionProvider.DEEPGRAM,
   deepgramKey: import.meta.env.VITE_DEEPGRAM_API_KEY || '',
+  groqKey: import.meta.env.VITE_GROQ_API_KEY || '',
   openaiKey: '',
   assemblyAiKey: import.meta.env.VITE_ASSEMBLYAI_API_KEY || '',
   googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
@@ -135,19 +136,28 @@ const App: React.FC = () => {
                 fileToProcess = nextItem.file;
             }
 
-            // Deepgram and Gemini both run their own FFmpeg preparation internally
-            // (Deepgram via prepareAudioChunks, Gemini via the file upload API),
-            // so we skip the generic WAV pre-extraction pass here for both —
-            // it would just be wasted CPU/battery, which matters most on mobile.
+            // Deepgram, Groq, and Gemini all run their own FFmpeg preparation
+            // internally (Deepgram/Groq via prepareAudioChunks, Gemini via the
+            // file upload API), so we skip the generic WAV pre-extraction pass
+            // here for all three — it would just be wasted CPU/battery, which
+            // matters most on mobile.
             const usingDeepgram = !!settings.deepgramKey?.trim();
-            const skipConversion = usingDeepgram || settings.provider === TranscriptionProvider.GEMINI;
+            const usingGroq = !usingDeepgram && !!settings.groqKey?.trim();
+            const skipConversion = usingDeepgram || usingGroq || settings.provider === TranscriptionProvider.GEMINI;
             updateItem(itemId, { status: 'PROCESSING', stage: skipConversion ? 'Analyzing Content...' : 'Scraping Audio (FFmpeg)...', progress: 10 });
-            
+
             const processedFile = await processMediaFile(fileToProcess as any, skipConversion, (pct) => {
                 if (!skipConversion) updateItem(itemId, { stage: `Scraping Audio (${pct}%)`, progress: 10 + Math.round(pct * 0.1) });
             });
 
-            updateItem(itemId, { stage: usingDeepgram ? 'FFmpeg + Deepgram Transcription...' : 'AI Transcription...', progress: 20 });
+            updateItem(itemId, {
+                stage: usingDeepgram
+                    ? 'FFmpeg + Deepgram Transcription...'
+                    : usingGroq
+                        ? 'FFmpeg + Groq Whisper Transcription...'
+                        : 'AI Transcription...',
+                progress: 20,
+            });
             const result = await transcribeAudio(processedFile, '', settings, (pct) => {
                 updateItem(itemId, { stage: pct === 100 ? 'Finalizing Intelligence...' : `Processing (${pct}%)`, progress: 20 + Math.round(pct * 0.75) });
             });
@@ -169,6 +179,7 @@ const App: React.FC = () => {
 
   const viewingItem = viewingItemId ? queue.find(i => i.id === viewingItemId) : null;
   const deepgramActive = !!settings.deepgramKey?.trim();
+  const groqActive = !!settings.groqKey?.trim();
 
   const NAV_ITEMS = [
     { id: 'TRANSCRIPTION', icon: LayoutGrid, label: 'Workbench' },
@@ -247,7 +258,14 @@ const App: React.FC = () => {
                 <div className={`w-2 h-2 rounded-full shrink-0 ${deepgramActive ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-zinc-700'}`} />
               </div>
               <div className="flex items-center justify-between group">
-                <span className="text-xs font-bold text-zinc-500">Gemini {deepgramActive ? '(Fallback)' : '(Active)'}</span>
+                <span className="text-xs font-bold text-zinc-500 flex items-center gap-1.5">
+                  {groqActive && <Zap size={12} className="text-indigo-400" />}
+                  Groq Whisper {deepgramActive ? (groqActive ? '(Standby)' : '(No Key)') : groqActive ? '(Primary)' : '(No Key)'}
+                </span>
+                <div className={`w-2 h-2 rounded-full shrink-0 ${groqActive ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-zinc-700'}`} />
+              </div>
+              <div className="flex items-center justify-between group">
+                <span className="text-xs font-bold text-zinc-500">Gemini {deepgramActive || groqActive ? '(Fallback)' : '(Active)'}</span>
                 <div className={`w-2 h-2 rounded-full shrink-0 ${googleUser || settings.googleApiKey ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500 animate-pulse'}`} />
               </div>
               <div className="flex items-center justify-between group">
@@ -343,13 +361,32 @@ const App: React.FC = () => {
                     <p className="text-[11px] text-zinc-500 leading-relaxed px-1">
                       When set, every file is compressed/chunked with FFmpeg first, then transcribed with Deepgram
                       (Nova-3, with speaker diarization). If this is empty, or a Deepgram request fails, it automatically
-                      falls back to Gemini.
+                      falls back to Groq Whisper (if configured), then Gemini.
                     </p>
                   </div>
                </section>
 
                <section className="space-y-6">
-                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Cpu size={14} className="text-indigo-500" /> Fallback Engine (Gemini)</h3>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Zap size={14} className="text-indigo-500" /> Groq Whisper (Secondary Engine)</h3>
+                  <div className="space-y-4 p-5 sm:p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
+                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Groq API Key</label>
+                    <input
+                      type="password"
+                      value={settings.groqKey}
+                      onChange={(e) => handleSaveSettings({ ...settings, groqKey: e.target.value })}
+                      placeholder="Paste your Groq API key..."
+                      className="w-full bg-black border border-zinc-800 rounded-2xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all"
+                    />
+                    <p className="text-[11px] text-zinc-500 leading-relaxed px-1">
+                      Same FFmpeg compress/chunk pipeline as Deepgram, transcribed with Whisper Large v3. Used
+                      automatically if Deepgram is unconfigured or its request fails, before ever falling back to Gemini —
+                      this is what keeps a batch job from failing outright when one engine has an outage or bad key.
+                    </p>
+                  </div>
+               </section>
+
+               <section className="space-y-6">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Cpu size={14} className="text-indigo-500" /> Final Fallback (Gemini)</h3>
                   <div className="grid grid-cols-2 gap-3">
                      {[
                        { id: 'gemini-1.5-pro', label: '1.5 Pro', desc: 'Maximum Intelligence' },
