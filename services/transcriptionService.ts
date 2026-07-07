@@ -1,6 +1,7 @@
 import { TranscriptionSettings, TranscriptionResult } from "../types";
 import { transcribeWithDeepgram } from "./deepgramService";
 import { transcribeWithGroq } from "./groqService";
+import { analyzeTranscript } from "./analysisService";
 
 // Helper function to create fetch with timeout
 const fetchWithTimeout = (url: string, options: RequestInit, timeout = 30000): Promise<Response> => {
@@ -75,6 +76,10 @@ export const fetchRemoteMedia = async (url: string): Promise<Blob> => {
  * state has repeatedly broken transcription in production, so it's no longer
  * used as an automatic fallback. If both configured engines fail (or neither
  * is configured), this throws rather than silently handing the file to Gemini.
+ *
+ * Once transcription itself succeeds, a non-fatal analysis pass (Groq's chat
+ * model, see analysisService.ts) fills in the summary/key facts/action items
+ * that used to come from Gemini's combined transcribe+analyze prompt.
  */
 export const transcribeAudio = async (file: File | Blob, _base64: string, settings: TranscriptionSettings, onProgress?: (pct: number, stage?: string) => void): Promise<TranscriptionResult> => {
     const deepgramKey = settings.deepgramKey?.trim();
@@ -85,26 +90,32 @@ export const transcribeAudio = async (file: File | Blob, _base64: string, settin
     }
 
     let lastError: unknown;
+    let result: TranscriptionResult | undefined;
 
     if (deepgramKey) {
         try {
-            return await transcribeWithDeepgram(file, settings, onProgress);
+            result = await transcribeWithDeepgram(file, settings, onProgress);
         } catch (deepgramError) {
             console.warn("Deepgram transcription failed:", deepgramError);
             lastError = deepgramError;
         }
     }
 
-    if (groqKey) {
+    if (!result && groqKey) {
         try {
-            return await transcribeWithGroq(file, settings, onProgress);
+            result = await transcribeWithGroq(file, settings, onProgress);
         } catch (groqError) {
             console.warn("Groq Whisper transcription failed:", groqError);
             lastError = groqError;
         }
     }
 
-    throw new Error(
-        `All configured transcription engines failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`
-    );
+    if (!result) {
+        throw new Error(
+            `All configured transcription engines failed. Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+        );
+    }
+
+    onProgress?.(99, "Analyzing transcript...");
+    return await analyzeTranscript(result, settings);
 };

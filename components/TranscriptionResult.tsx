@@ -83,6 +83,7 @@ const CaseSyncPanel: React.FC<{ result: ResultType; fileName: string }> = ({ res
 const TranscriptionResult: React.FC<Props> = ({ result, audioFile }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [searchQuery, setSearchBar] = useState('');
+  const [showCleaned, setShowCleaned] = useState(false);
   const fileName = audioFile.name;
 
   const jumpTo = (time: number) => {
@@ -108,7 +109,7 @@ const TranscriptionResult: React.FC<Props> = ({ result, audioFile }) => {
                <h3 className="text-sm font-black uppercase tracking-widest">Executive Summary</h3>
             </div>
             <p className="text-zinc-300 leading-relaxed font-medium">
-               {result.summary || "AI is generating a strategic overview of this recording..."}
+               {result.summary || "No summary available (configure a Groq API key in Settings to enable AI analysis)."}
             </p>
          </div>
 
@@ -118,11 +119,13 @@ const TranscriptionResult: React.FC<Props> = ({ result, audioFile }) => {
                <h3 className="text-sm font-black uppercase tracking-widest">Key Facts</h3>
             </div>
             <ul className="space-y-2">
-               {(result.keyFacts || []).map((fact, i) => (
+               {result.keyFacts?.length ? result.keyFacts.map((fact, i) => (
                  <li key={i} className="text-xs text-zinc-400 flex gap-2">
                     <span className="text-emerald-500">•</span> {fact}
                  </li>
-               ))}
+               )) : (
+                 <li className="text-xs text-zinc-600">None extracted.</li>
+               )}
             </ul>
          </div>
       </div>
@@ -147,40 +150,59 @@ const TranscriptionResult: React.FC<Props> = ({ result, audioFile }) => {
       <div className="space-y-6">
          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h3 className="text-lg font-black text-white flex items-center gap-2">
-               Transcript 
+               Transcript
                <span className="text-[10px] bg-zinc-800 px-2 py-0.5 rounded-full text-zinc-500 uppercase tracking-tighter">Verified</span>
             </h3>
-            <div className="relative w-full sm:w-64">
-               <Search className="absolute left-3 top-2.5 text-zinc-600" size={14} />
-               <input 
-                  type="text" 
-                  placeholder="Search testimony..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchBar(e.target.value)}
-                  className="bg-zinc-900 border border-zinc-800 rounded-xl pl-9 pr-4 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 w-full transition-all"
-               />
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+               {result.cleanedText && (
+                  <button
+                     onClick={() => setShowCleaned((v) => !v)}
+                     className={`shrink-0 px-3 py-2 rounded-xl text-xs font-bold uppercase tracking-tighter transition-all ${showCleaned ? 'bg-indigo-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-white'}`}
+                  >
+                     {showCleaned ? 'Showing AI-Cleaned Copy' : 'Show AI-Cleaned Copy'}
+                  </button>
+               )}
+               <div className="relative w-full sm:w-64">
+                  <Search className="absolute left-3 top-2.5 text-zinc-600" size={14} />
+                  <input
+                     type="text"
+                     placeholder="Search testimony..."
+                     value={searchQuery}
+                     onChange={(e) => setSearchBar(e.target.value)}
+                     className="bg-zinc-900 border border-zinc-800 rounded-xl pl-9 pr-4 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 w-full transition-all"
+                  />
+               </div>
             </div>
          </div>
 
-         <div className="space-y-1">
-            {filteredSegments?.map((s, i) => (
-               <div 
-                  key={i} 
-                  onClick={() => jumpTo(s.start)}
-                  className="group grid grid-cols-1 sm:grid-cols-[100px_1fr] gap-1.5 sm:gap-6 p-3 sm:p-4 rounded-2xl hover:bg-white/5 cursor-pointer transition-all border border-transparent hover:border-zinc-800"
-               >
-                  <div className="text-[10px] font-black text-zinc-600 mt-1 flex flex-col gap-1">
-                     <span className="flex items-center gap-1 group-hover:text-indigo-400 transition-colors">
-                        <Clock size={10} /> {formatTime(s.start)}
-                     </span>
-                     <span className="uppercase tracking-widest truncate">{s.speaker}</span>
+         {showCleaned && result.cleanedText ? (
+            <div className="p-4 sm:p-6 rounded-2xl bg-zinc-900/50 border border-zinc-800">
+               <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-3">
+                  AI-cleaned reading copy — filler words and obvious ASR errors fixed. The verbatim transcript above remains the source of record.
+               </p>
+               <p className="text-sm leading-relaxed text-zinc-300 whitespace-pre-wrap">{result.cleanedText}</p>
+            </div>
+         ) : (
+            <div className="space-y-1">
+               {filteredSegments?.map((s, i) => (
+                  <div
+                     key={i}
+                     onClick={() => jumpTo(s.start)}
+                     className="group grid grid-cols-1 sm:grid-cols-[100px_1fr] gap-1.5 sm:gap-6 p-3 sm:p-4 rounded-2xl hover:bg-white/5 cursor-pointer transition-all border border-transparent hover:border-zinc-800"
+                  >
+                     <div className="text-[10px] font-black text-zinc-600 mt-1 flex flex-col gap-1">
+                        <span className="flex items-center gap-1 group-hover:text-indigo-400 transition-colors">
+                           <Clock size={10} /> {formatTime(s.start)}
+                        </span>
+                        <span className="uppercase tracking-widest truncate">{s.speaker}</span>
+                     </div>
+                     <p className="text-sm leading-relaxed text-zinc-300 group-hover:text-white transition-colors">
+                        {s.text}
+                     </p>
                   </div>
-                  <p className="text-sm leading-relaxed text-zinc-300 group-hover:text-white transition-colors">
-                     {s.text}
-                  </p>
-               </div>
-            ))}
-         </div>
+               ))}
+            </div>
+         )}
       </div>
     </div>
   );
