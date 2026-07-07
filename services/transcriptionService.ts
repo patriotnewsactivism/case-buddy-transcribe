@@ -3,6 +3,7 @@ import { TranscriptionProvider, TranscriptionSettings, TranscriptionResult, Tran
 import { getAccessToken } from "./googleAuthService";
 import { fileToBase64 } from "../utils/audioUtils";
 import { transcribeWithDeepgram } from "./deepgramService";
+import { transcribeWithGroq } from "./groqService";
 
 // Helper function to create fetch with timeout
 const fetchWithTimeout = (url: string, options: RequestInit, timeout = 30000): Promise<Response> => {
@@ -347,24 +348,37 @@ const uploadWithOAuth = async (file: Blob | File, onProgress?: (pct: number) => 
 };
 
 /**
- * Main transcription entry point.
- * Always prefers Deepgram (run through FFmpeg preprocessing) when a Deepgram
- * API key is configured — it's faster and cheaper for straight transcription.
- * Falls back to Gemini automatically if no Deepgram key is set, or if the
- * Deepgram request fails for any reason (network issue, bad key, quota, etc).
+ * Main transcription entry point — a three-tier waterfall, both FFmpeg-backed
+ * chunking engines first, high-intelligence multimodal model last:
+ *
+ *  1. Deepgram (Nova-3, via FFmpeg compress+chunk) — fastest, cheapest,
+ *     diarized. Used whenever a Deepgram key is configured.
+ *  2. Groq Whisper (whisper-large-v3, via the same FFmpeg pipeline) — used if
+ *     Deepgram is unconfigured or its request fails for any reason (network
+ *     issue, bad key, quota, outage, etc).
+ *  3. Gemini — the only engine that supports the "Smart Intelligence" features
+ *     (summary / key facts / action items). Final fallback so a file only
+ *     ever fails if every configured engine failed.
  */
 export const transcribeAudio = async (file: File | Blob, _base64: string, settings: TranscriptionSettings, onProgress?: (pct: number) => void): Promise<TranscriptionResult> => {
     const deepgramKey = settings.deepgramKey?.trim();
+    const groqKey = settings.groqKey?.trim();
 
     if (deepgramKey) {
         try {
             return await transcribeWithDeepgram(file, settings, onProgress);
         } catch (deepgramError) {
-            console.warn("Deepgram transcription failed, falling back to Gemini:", deepgramError);
+            console.warn("Deepgram transcription failed, falling back:", deepgramError);
         }
     }
 
-    // Gemini is the only engine that currently supports the "Smart Intelligence"
-    // features (summary / key facts / action items) in the prompt.
+    if (groqKey) {
+        try {
+            return await transcribeWithGroq(file, settings, onProgress);
+        } catch (groqError) {
+            console.warn("Groq Whisper transcription failed, falling back to Gemini:", groqError);
+        }
+    }
+
     return await transcribeWithGemini(file, settings, onProgress);
 };
