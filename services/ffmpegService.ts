@@ -31,6 +31,24 @@ const getInstance = (): FFmpeg => {
     return ffmpegInstance;
 };
 
+// A WASM trap (e.g. "memory access out of bounds") leaves the ffmpeg-core
+// instance permanently corrupted — `ff.loaded` stays true, so every
+// subsequent call on the same instance keeps throwing the identical error.
+// In a batch, this previously meant one bad file silently killed every file
+// after it for the rest of the session.
+const isFatalWasmError = (err: unknown): boolean => {
+    const message = err instanceof Error ? err.message : String(err);
+    return /memory access out of bounds|RuntimeError|unreachable executed/i.test(message);
+};
+
+// Tears down the corrupted instance so the next loadFFmpeg() call boots a
+// fresh one instead of reusing the poisoned WASM memory.
+const resetFFmpeg = (): void => {
+    try { ffmpegInstance?.terminate(); } catch { /* already dead */ }
+    ffmpegInstance = null;
+    loadPromise = null;
+};
+
 const loadFromMirror = async (ff: FFmpeg, baseURL: string): Promise<void> => {
     await Promise.race([
         (async () => {
@@ -252,7 +270,7 @@ const extractChunk = async (
  * Returns an array of { blob, startSec } objects.
  * Single-chunk recordings return an array of length 1 with startSec = 0.
  */
-export const prepareAudioChunks = async (
+const runPrepareAudioChunks = async (
     file: File | Blob,
     onProgress?: FFmpegProgressCallback
 ): Promise<Array<{ blob: Blob; startSec: number }>> => {
@@ -321,5 +339,25 @@ export const prepareAudioChunks = async (
         return chunks;
     } finally {
         try { await ff.deleteFile(inputName); } catch { /* ignore */ }
+    }
+};
+
+/**
+ * Prepare audio for transcription (Deepgram / Groq both funnel through this).
+ * If the WASM instance hits a fatal trap (corrupting it for every future
+ * call), tear it down and retry once against a freshly booted instance
+ * instead of letting one bad file take down the rest of the batch.
+ */
+export const prepareAudioChunks = async (
+    file: File | Blob,
+    onProgress?: FFmpegProgressCallback
+): Promise<Array<{ blob: Blob; startSec: number }>> => {
+    try {
+        return await runPrepareAudioChunks(file, onProgress);
+    } catch (err) {
+        if (!isFatalWasmError(err)) throw err;
+        console.warn("FFmpeg WASM instance crashed, restarting for retry:", err);
+        resetFFmpeg();
+        return await runPrepareAudioChunks(file, onProgress);
     }
 };

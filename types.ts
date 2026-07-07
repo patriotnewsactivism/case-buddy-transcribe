@@ -48,6 +48,12 @@ export interface TranscriptionResult {
   summary?: string;
   keyFacts?: string[];
   actionItems?: string[];
+  /**
+   * AI-cleaned reading copy (filler words / obvious ASR errors fixed) —
+   * always kept separate from `text`/`segments`, which stay verbatim as the
+   * source of truth for evidentiary/legal accuracy.
+   */
+  cleanedText?: string;
   detectedLanguage?: string;
   providerUsed: TranscriptionProvider;
 }
