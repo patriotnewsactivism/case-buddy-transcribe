@@ -201,9 +201,17 @@ const extractChunk = async (
     inputName: string,
     startSec: number,
     durationSec: number,
-    chunkIndex: number
+    chunkIndex: number,
+    onChunkProgress?: (ratio: number) => void
 ): Promise<{ blob: Blob; startSec: number }> => {
     const outputName = `chunk_out_${chunkIndex}_${Date.now()}.mp3`;
+
+    const progressHandler = ({ progress }: { progress: number }) => {
+        // ffmpeg reports 0-1 (occasionally slightly over on the last chunk) for
+        // THIS chunk's transcode; clamp so a rounding blip can't move us backwards.
+        onChunkProgress?.(Math.max(0, Math.min(1, progress)));
+    };
+    ff.on("progress", progressHandler);
 
     try {
         await ff.exec([
@@ -224,6 +232,7 @@ const extractChunk = async (
             startSec,
         };
     } finally {
+        ff.off("progress", progressHandler);
         try { await ff.deleteFile(outputName); } catch { /* ignore */ }
     }
 };
@@ -288,15 +297,20 @@ export const prepareAudioChunks = async (
 
         // Split into overlapping chunks, slicing directly off the raw source.
         const chunks: Array<{ blob: Blob; startSec: number }> = [];
+        const totalChunks = Math.ceil(duration / CHUNK_DURATION_SEC);
         let offset = 0;
         let chunkIdx = 0;
 
         while (offset < duration) {
             const chunkDur = Math.min(CHUNK_DURATION_SEC + CHUNK_OVERLAP_SEC, duration - offset);
-            const pct = 10 + Math.round((offset / duration) * 88);   // 10–98 %
-            onProgress?.(pct, `Slicing chunk ${chunkIdx + 1}...`);
+            const chunkStartPct = 10 + Math.round((offset / duration) * 88);      // 10–98 %
+            const chunkEndPct = 10 + Math.round(Math.min(offset + CHUNK_DURATION_SEC, duration) / duration * 88);
+            onProgress?.(chunkStartPct, `Compressing chunk ${chunkIdx + 1}/${totalChunks}...`);
 
-            const chunk = await extractChunk(ff, inputName, offset, chunkDur, chunkIdx);
+            const chunk = await extractChunk(ff, inputName, offset, chunkDur, chunkIdx, (ratio) => {
+                const pct = chunkStartPct + Math.round(ratio * (chunkEndPct - chunkStartPct));
+                onProgress?.(pct, `Compressing chunk ${chunkIdx + 1}/${totalChunks}...`);
+            });
             chunks.push(chunk);
 
             offset += CHUNK_DURATION_SEC;

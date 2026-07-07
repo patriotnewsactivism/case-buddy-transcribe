@@ -154,8 +154,8 @@ const App: React.FC = () => {
                         : 'Transcribing...',
                 progress: 20,
             });
-            const result = await transcribeAudio(processedFile, '', settings, (pct) => {
-                updateItem(itemId, { stage: pct === 100 ? 'Finalizing Intelligence...' : `Processing (${pct}%)`, progress: 20 + Math.round(pct * 0.75) });
+            const result = await transcribeAudio(processedFile, '', settings, (pct, stage) => {
+                updateItem(itemId, { stage: pct === 100 ? 'Finalizing Intelligence...' : (stage || 'Processing...'), progress: 20 + Math.round(pct * 0.75) });
             });
             updateItem(itemId, { status: 'COMPLETED', progress: 100, result: result });
         } catch (error) {
