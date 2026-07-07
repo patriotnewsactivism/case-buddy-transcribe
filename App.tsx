@@ -136,26 +136,22 @@ const App: React.FC = () => {
                 fileToProcess = nextItem.file;
             }
 
-            // Deepgram, Groq, and Gemini all run their own FFmpeg preparation
-            // internally (Deepgram/Groq via prepareAudioChunks, Gemini via the
-            // file upload API), so we skip the generic WAV pre-extraction pass
-            // here for all three — it would just be wasted CPU/battery, which
-            // matters most on mobile.
+            // Deepgram and Groq both run their own FFmpeg preprocessing internally
+            // (via prepareAudioChunks), so we skip the generic WAV pre-extraction
+            // pass here — it would just be wasted CPU/battery, which matters most
+            // on mobile.
             const usingDeepgram = !!settings.deepgramKey?.trim();
             const usingGroq = !usingDeepgram && !!settings.groqKey?.trim();
-            const skipConversion = usingDeepgram || usingGroq || settings.provider === TranscriptionProvider.GEMINI;
-            updateItem(itemId, { status: 'PROCESSING', stage: skipConversion ? 'Analyzing Content...' : 'Scraping Audio (FFmpeg)...', progress: 10 });
+            updateItem(itemId, { status: 'PROCESSING', stage: 'Analyzing Content...', progress: 10 });
 
-            const processedFile = await processMediaFile(fileToProcess as any, skipConversion, (pct) => {
-                if (!skipConversion) updateItem(itemId, { stage: `Scraping Audio (${pct}%)`, progress: 10 + Math.round(pct * 0.1) });
-            });
+            const processedFile = await processMediaFile(fileToProcess as any, true);
 
             updateItem(itemId, {
                 stage: usingDeepgram
                     ? 'FFmpeg + Deepgram Transcription...'
                     : usingGroq
                         ? 'FFmpeg + Groq Whisper Transcription...'
-                        : 'AI Transcription...',
+                        : 'Transcribing...',
                 progress: 20,
             });
             const result = await transcribeAudio(processedFile, '', settings, (pct) => {
@@ -265,10 +261,6 @@ const App: React.FC = () => {
                 <div className={`w-2 h-2 rounded-full shrink-0 ${groqActive ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-zinc-700'}`} />
               </div>
               <div className="flex items-center justify-between group">
-                <span className="text-xs font-bold text-zinc-500">Gemini {deepgramActive || groqActive ? '(Fallback)' : '(Active)'}</span>
-                <div className={`w-2 h-2 rounded-full shrink-0 ${googleUser || settings.googleApiKey ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500 animate-pulse'}`} />
-              </div>
-              <div className="flex items-center justify-between group">
                 <span className="text-xs font-bold text-zinc-500">FFmpeg Scraper</span>
                 <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)] shrink-0" />
               </div>
@@ -361,7 +353,7 @@ const App: React.FC = () => {
                     <p className="text-[11px] text-zinc-500 leading-relaxed px-1">
                       When set, every file is compressed/chunked with FFmpeg first, then transcribed with Deepgram
                       (Nova-3, with speaker diarization). If this is empty, or a Deepgram request fails, it automatically
-                      falls back to Groq Whisper (if configured), then Gemini.
+                      falls back to Groq Whisper (if configured).
                     </p>
                   </div>
                </section>
@@ -379,24 +371,9 @@ const App: React.FC = () => {
                     />
                     <p className="text-[11px] text-zinc-500 leading-relaxed px-1">
                       Same FFmpeg compress/chunk pipeline as Deepgram, transcribed with Whisper Large v3. Used
-                      automatically if Deepgram is unconfigured or its request fails, before ever falling back to Gemini —
-                      this is what keeps a batch job from failing outright when one engine has an outage or bad key.
+                      automatically if Deepgram is unconfigured or its request fails — this is what keeps a batch job
+                      from failing outright when one engine has an outage or bad key.
                     </p>
-                  </div>
-               </section>
-
-               <section className="space-y-6">
-                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Cpu size={14} className="text-indigo-500" /> Final Fallback (Gemini)</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                     {[
-                       { id: 'gemini-1.5-pro', label: '1.5 Pro', desc: 'Maximum Intelligence' },
-                       { id: 'gemini-2.5-flash', label: '2.5 Flash', desc: 'Highest Speed' },
-                     ].map(m => (
-                       <button key={m.id} onClick={() => handleSaveSettings({ ...settings, geminiModel: m.id as any })} className={`p-4 sm:p-5 rounded-3xl border transition-all text-left relative overflow-hidden ${settings.geminiModel === m.id ? 'bg-white border-white' : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'}`}>
-                          <p className={`text-sm font-black ${settings.geminiModel === m.id ? 'text-black' : 'text-white'}`}>{m.label}</p>
-                          <p className={`text-[10px] font-bold mt-1 ${settings.geminiModel === m.id ? 'text-zinc-600' : 'text-zinc-500'}`}>{m.desc}</p>
-                       </button>
-                     ))}
                   </div>
                </section>
 
