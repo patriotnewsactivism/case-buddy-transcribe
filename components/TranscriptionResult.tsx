@@ -1,7 +1,8 @@
-import React, { useRef, useState } from 'react';
-import { Play, Download, Copy, Share2, Search, Brain, ListChecks, Fingerprint, Clock } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Play, Download, Copy, Share2, Search, Brain, ListChecks, Fingerprint, Clock, FolderSync, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { TranscriptionResult as ResultType, TranscriptSegment } from '../types';
 import { formatTime } from '../utils/audioUtils';
+import { isSupabaseSyncConfigured, listCases, syncTranscriptToCase, CaseOption } from '../services/supabaseSyncService';
 
 interface Props {
   result: ResultType;
@@ -9,9 +10,80 @@ interface Props {
   onTeachAi?: (phrase: string) => void;
 }
 
+const CaseSyncPanel: React.FC<{ result: ResultType; fileName: string }> = ({ result, fileName }) => {
+  const [cases, setCases] = useState<CaseOption[]>([]);
+  const [loadingCases, setLoadingCases] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selectedCaseId, setSelectedCaseId] = useState('');
+  const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isSupabaseSyncConfigured()) {
+      setLoadingCases(false);
+      return;
+    }
+    listCases()
+      .then((data) => setCases(data))
+      .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoadingCases(false));
+  }, []);
+
+  if (!isSupabaseSyncConfigured()) return null;
+
+  const handleSync = async () => {
+    if (!selectedCaseId) return;
+    setSyncState('syncing');
+    setSyncError(null);
+    try {
+      await syncTranscriptToCase(selectedCaseId, fileName, result);
+      setSyncState('done');
+    } catch (e) {
+      setSyncState('error');
+      setSyncError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800">
+      <div className="flex items-center gap-2 mb-4 text-indigo-400">
+        <FolderSync size={20} />
+        <h3 className="text-sm font-black uppercase tracking-widest">Sync to Case</h3>
+      </div>
+
+      {loadError && <p className="text-xs text-red-400 mb-3">{loadError}</p>}
+
+      <div className="flex flex-col sm:flex-row gap-3">
+        <select
+          value={selectedCaseId}
+          onChange={(e) => { setSelectedCaseId(e.target.value); setSyncState('idle'); }}
+          disabled={loadingCases || !!loadError}
+          className="flex-1 bg-black border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all disabled:opacity-50"
+        >
+          <option value="">{loadingCases ? 'Loading cases...' : 'Select a case...'}</option>
+          {cases.map((c) => (
+            <option key={c.id} value={c.id}>{c.client_name} — {c.name}</option>
+          ))}
+        </select>
+        <button
+          onClick={handleSync}
+          disabled={!selectedCaseId || syncState === 'syncing'}
+          className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-500 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 shrink-0"
+        >
+          {syncState === 'syncing' ? <Loader2 size={16} className="animate-spin" /> : syncState === 'done' ? <CheckCircle2 size={16} /> : syncState === 'error' ? <AlertCircle size={16} /> : <FolderSync size={16} />}
+          {syncState === 'syncing' ? 'Syncing...' : syncState === 'done' ? 'Synced' : syncState === 'error' ? 'Retry' : 'Sync'}
+        </button>
+      </div>
+
+      {syncError && <p className="text-xs text-red-400 mt-3">{syncError}</p>}
+    </div>
+  );
+};
+
 const TranscriptionResult: React.FC<Props> = ({ result, audioFile }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [searchQuery, setSearchBar] = useState('');
+  const fileName = audioFile.name;
 
   const jumpTo = (time: number) => {
     if (audioRef.current) {
@@ -54,6 +126,8 @@ const TranscriptionResult: React.FC<Props> = ({ result, audioFile }) => {
             </ul>
          </div>
       </div>
+
+      <CaseSyncPanel result={result} fileName={fileName} />
 
       {/* 2. MEDIA PLAYER CONTROL */}
       <div className="sticky top-16 sm:top-24 z-20 p-3 sm:p-4 rounded-2xl bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 shadow-2xl flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-6">
