@@ -8,15 +8,20 @@ const CHUNK_DURATION_SEC = 600;   // 10 minutes per chunk
 const CHUNK_OVERLAP_SEC  = 5;     // 5 second overlap to avoid cutting words
 const CHUNK_THRESHOLD_SEC = 900;  // chunk files longer than 15 minutes
 
-// Mirrors of the ffmpeg-core WASM bundle. Mobile networks / corporate proxies
-// occasionally block or fail to reach unpkg, which previously meant the whole
-// pipeline (and therefore Deepgram/Groq, both of which depend on FFmpeg for
-// compression) hard-failed with no way to recover for the rest of the session.
-// Trying a second CDN gives large-file transcription a real chance to succeed
-// even when the first mirror is unreachable.
+// Mirrors of the ffmpeg-core WASM bundle. Must be the ESM build: @ffmpeg/ffmpeg
+// always spins up its worker as `type: "module"`, which means `importScripts()`
+// (used to load the UMD build) is unavailable and throws inside that worker —
+// every load falls through to `await import(coreURL)`, which only produces a
+// usable `createFFmpegCore` export when coreURL points at the ESM build. The
+// UMD build has no `export default`, so importing it silently resolves to an
+// empty module and every load fails with "failed to import ffmpeg-core.js".
+//
+// Mobile networks / corporate proxies also occasionally block or fail to reach
+// unpkg, so a second CDN mirror gives large-file transcription a real chance
+// to succeed even when the first is unreachable.
 const FFMPEG_CORE_MIRRORS = [
-    "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd",
-    "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd",
+    "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm",
+    "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm",
 ];
 
 export type FFmpegProgressCallback = (pct: number, stage: string) => void;
