@@ -2,6 +2,7 @@ import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { TranscriptionProvider, TranscriptionSettings, TranscriptionResult, TranscriptSegment } from "../types";
 import { getAccessToken } from "./googleAuthService";
 import { fileToBase64 } from "../utils/audioUtils";
+import { transcribeWithDeepgram } from "./deepgramService";
 
 // Helper function to create fetch with timeout
 const fetchWithTimeout = (url: string, options: RequestInit, timeout = 30000): Promise<Response> => {
@@ -343,7 +344,25 @@ const uploadWithOAuth = async (file: Blob | File, onProgress?: (pct: number) => 
     }, 3, 2000);
 };
 
+/**
+ * Main transcription entry point.
+ * Always prefers Deepgram (run through FFmpeg preprocessing) when a Deepgram
+ * API key is configured — it's faster and cheaper for straight transcription.
+ * Falls back to Gemini automatically if no Deepgram key is set, or if the
+ * Deepgram request fails for any reason (network issue, bad key, quota, etc).
+ */
 export const transcribeAudio = async (file: File | Blob, _base64: string, settings: TranscriptionSettings, onProgress?: (pct: number) => void): Promise<TranscriptionResult> => {
-    // For now, only Gemini supports the "Smart Intelligence" features in the prompt.
+    const deepgramKey = settings.deepgramKey?.trim();
+
+    if (deepgramKey) {
+        try {
+            return await transcribeWithDeepgram(file, settings, onProgress);
+        } catch (deepgramError) {
+            console.warn("Deepgram transcription failed, falling back to Gemini:", deepgramError);
+        }
+    }
+
+    // Gemini is the only engine that currently supports the "Smart Intelligence"
+    // features (summary / key facts / action items) in the prompt.
     return await transcribeWithGemini(file, settings, onProgress);
 };

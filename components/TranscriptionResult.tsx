@@ -56,14 +56,14 @@ const TranscriptionResult: React.FC<Props> = ({ result, audioFile }) => {
       </div>
 
       {/* 2. MEDIA PLAYER CONTROL */}
-      <div className="sticky top-24 z-30 p-4 rounded-2xl bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 shadow-2xl flex items-center gap-6">
+      <div className="sticky top-16 sm:top-24 z-20 p-3 sm:p-4 rounded-2xl bg-zinc-900/80 backdrop-blur-xl border border-zinc-800 shadow-2xl flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-6">
          <audio 
             ref={audioRef} 
             src={audioFile instanceof File ? URL.createObjectURL(audioFile) : audioFile.url} 
             controls 
-            className="flex-1 h-10 custom-audio-player"
+            className="flex-1 h-10 w-full custom-audio-player"
          />
-         <div className="flex gap-2">
+         <div className="flex gap-2 justify-end shrink-0">
             <button className="p-2.5 rounded-xl bg-zinc-800 text-zinc-400 hover:text-white transition-all"><Download size={18} /></button>
             <button className="p-2.5 rounded-xl bg-zinc-800 text-zinc-400 hover:text-white transition-all"><Copy size={18} /></button>
          </div>
@@ -71,19 +71,19 @@ const TranscriptionResult: React.FC<Props> = ({ result, audioFile }) => {
 
       {/* 3. INTERACTIVE TRANSCRIPT */}
       <div className="space-y-6">
-         <div className="flex items-center justify-between">
+         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h3 className="text-lg font-black text-white flex items-center gap-2">
                Transcript 
                <span className="text-[10px] bg-zinc-800 px-2 py-0.5 rounded-full text-zinc-500 uppercase tracking-tighter">Verified</span>
             </h3>
-            <div className="relative">
+            <div className="relative w-full sm:w-64">
                <Search className="absolute left-3 top-2.5 text-zinc-600" size={14} />
                <input 
                   type="text" 
                   placeholder="Search testimony..."
                   value={searchQuery}
                   onChange={(e) => setSearchBar(e.target.value)}
-                  className="bg-zinc-900 border border-zinc-800 rounded-xl pl-9 pr-4 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 w-64 transition-all"
+                  className="bg-zinc-900 border border-zinc-800 rounded-xl pl-9 pr-4 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 w-full transition-all"
                />
             </div>
          </div>
@@ -93,7 +93,7 @@ const TranscriptionResult: React.FC<Props> = ({ result, audioFile }) => {
                <div 
                   key={i} 
                   onClick={() => jumpTo(s.start)}
-                  className="group grid grid-cols-[100px_1fr] gap-6 p-4 rounded-2xl hover:bg-white/5 cursor-pointer transition-all border border-transparent hover:border-zinc-800"
+                  className="group grid grid-cols-1 sm:grid-cols-[100px_1fr] gap-1.5 sm:gap-6 p-3 sm:p-4 rounded-2xl hover:bg-white/5 cursor-pointer transition-all border border-transparent hover:border-zinc-800"
                >
                   <div className="text-[10px] font-black text-zinc-600 mt-1 flex flex-col gap-1">
                      <span className="flex items-center gap-1 group-hover:text-indigo-400 transition-colors">

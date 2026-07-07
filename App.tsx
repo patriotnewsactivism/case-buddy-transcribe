@@ -13,11 +13,12 @@ import { initGoogleAuth, handleCredentialResponse, signOut as googleSignOut, sig
 import { 
   ArrowLeft, Settings2, Shield, Activity, HardDrive, Cpu, 
   LogOut, Key, Info, ExternalLink,
-  LayoutGrid, ListTodo, Eye, EyeOff, Book, Link as LinkIcon, Play, AlertCircle
+  LayoutGrid, ListTodo, Eye, EyeOff, Book, Link as LinkIcon, Play, AlertCircle, Menu, X, Zap
 } from 'lucide-react';
 
 const DEFAULT_SETTINGS: TranscriptionSettings = {
-  provider: TranscriptionProvider.GEMINI,
+  provider: TranscriptionProvider.DEEPGRAM,
+  deepgramKey: import.meta.env.VITE_DEEPGRAM_API_KEY || '',
   openaiKey: '',
   assemblyAiKey: import.meta.env.VITE_ASSEMBLYAI_API_KEY || '',
   googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
@@ -37,6 +38,7 @@ const App: React.FC = () => {
   const [googleUser, setGoogleUser] = useState<GoogleUser | null>(null);
   const [remoteUrl, setRemoteUrl] = useState('');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // mobile drawer state
   
   const [queue, setQueue] = useState<BatchItem[]>([]);
   const [viewingItemId, setViewingItemId] = useState<string | null>(null);
@@ -133,14 +135,19 @@ const App: React.FC = () => {
                 fileToProcess = nextItem.file;
             }
 
-            const skipConversion = settings.provider === TranscriptionProvider.GEMINI;
+            // Deepgram and Gemini both run their own FFmpeg preparation internally
+            // (Deepgram via prepareAudioChunks, Gemini via the file upload API),
+            // so we skip the generic WAV pre-extraction pass here for both —
+            // it would just be wasted CPU/battery, which matters most on mobile.
+            const usingDeepgram = !!settings.deepgramKey?.trim();
+            const skipConversion = usingDeepgram || settings.provider === TranscriptionProvider.GEMINI;
             updateItem(itemId, { status: 'PROCESSING', stage: skipConversion ? 'Analyzing Content...' : 'Scraping Audio (FFmpeg)...', progress: 10 });
             
             const processedFile = await processMediaFile(fileToProcess as any, skipConversion, (pct) => {
                 if (!skipConversion) updateItem(itemId, { stage: `Scraping Audio (${pct}%)`, progress: 10 + Math.round(pct * 0.1) });
             });
 
-            updateItem(itemId, { stage: 'AI Transcription...', progress: 20 });
+            updateItem(itemId, { stage: usingDeepgram ? 'FFmpeg + Deepgram Transcription...' : 'AI Transcription...', progress: 20 });
             const result = await transcribeAudio(processedFile, '', settings, (pct) => {
                 updateItem(itemId, { stage: pct === 100 ? 'Finalizing Intelligence...' : `Processing (${pct}%)`, progress: 20 + Math.round(pct * 0.75) });
             });
@@ -161,23 +168,47 @@ const App: React.FC = () => {
   };
 
   const viewingItem = viewingItemId ? queue.find(i => i.id === viewingItemId) : null;
+  const deepgramActive = !!settings.deepgramKey?.trim();
+
+  const NAV_ITEMS = [
+    { id: 'TRANSCRIPTION', icon: LayoutGrid, label: 'Workbench' },
+    { id: 'HISTORY', icon: ListTodo, label: 'Batch Queue' },
+    { id: 'SETTINGS', icon: Settings2, label: 'Engine Config' },
+  ] as const;
 
   return (
     <div className="flex h-screen bg-black text-zinc-100 font-sans overflow-hidden">
-      <aside className="w-80 border-r border-zinc-800 flex flex-col bg-zinc-950">
-        <div className="p-6">
-           <div className="flex items-center gap-3 mb-8">
-              <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-2xl shadow-indigo-500/30"><Activity size={22} /></div>
-              <div>
-                <h1 className="text-lg font-bold text-white tracking-tight">CaseBuddy</h1>
-                <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest leading-none text-nowrap">Intelligence Engine</p>
+
+      {/* Mobile overlay behind the drawer */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-40 md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      <aside
+        className={`fixed md:static inset-y-0 left-0 z-50 w-72 sm:w-80 border-r border-zinc-800 flex flex-col bg-zinc-950 transform transition-transform duration-300 ease-in-out
+          ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}
+      >
+        <div className="p-5 sm:p-6 overflow-y-auto">
+           <div className="flex items-center justify-between mb-8">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-2xl shadow-indigo-500/30 shrink-0"><Activity size={22} /></div>
+                <div>
+                  <h1 className="text-lg font-bold text-white tracking-tight">CaseBuddy</h1>
+                  <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest leading-none text-nowrap">Intelligence Engine</p>
+                </div>
               </div>
+              <button onClick={() => setIsSidebarOpen(false)} className="md:hidden p-2 text-zinc-500 hover:text-white">
+                <X size={20} />
+              </button>
            </div>
 
            <div className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 mb-6 group transition-all hover:border-zinc-700">
               {googleUser ? (
                   <div className="flex items-center gap-3">
-                    <img src={googleUser.picture} className="w-10 h-10 rounded-full border border-zinc-700" alt="" />
+                    <img src={googleUser.picture} className="w-10 h-10 rounded-full border border-zinc-700 shrink-0" alt="" />
                     <div className="flex-1 overflow-hidden">
                       <p className="text-sm font-bold text-white truncate">{googleUser.name}</p>
                       <button onClick={() => { googleSignOut(); setGoogleUser(null); }} className="text-[10px] text-zinc-500 hover:text-red-400 font-bold uppercase mt-0.5">DISCONNECT</button>
@@ -189,14 +220,10 @@ const App: React.FC = () => {
            </div>
 
            <nav className="space-y-1">
-              {[
-                { id: 'TRANSCRIPTION', icon: LayoutGrid, label: 'Workbench' },
-                { id: 'HISTORY', icon: ListTodo, label: 'Batch Queue' },
-                { id: 'SETTINGS', icon: Settings2, label: 'Engine Config' },
-              ].map((item) => (
+              {NAV_ITEMS.map((item) => (
                 <button
                   key={item.id}
-                  onClick={() => setActiveTab(item.id as any)}
+                  onClick={() => { setActiveTab(item.id as any); setIsSidebarOpen(false); }}
                   className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all ${activeTab === item.id ? 'bg-zinc-800/50 text-white' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900'}`}
                 >
                   <div className="flex items-center gap-3">
@@ -209,40 +236,52 @@ const App: React.FC = () => {
            </nav>
         </div>
 
-        <div className="mt-auto p-6 border-t border-zinc-900 space-y-4">
+        <div className="mt-auto p-5 sm:p-6 border-t border-zinc-900 space-y-4">
            <h3 className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.2em] px-1">Engine Status</h3>
            <div className="space-y-3 px-1">
               <div className="flex items-center justify-between group">
-                <span className="text-xs font-bold text-zinc-500">Gemini 1.5 Pro</span>
-                <div className={`w-2 h-2 rounded-full ${googleUser ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500 animate-pulse'}`} />
+                <span className="text-xs font-bold text-zinc-500 flex items-center gap-1.5">
+                  {deepgramActive && <Zap size={12} className="text-indigo-400" />}
+                  Deepgram {deepgramActive ? '(Primary)' : '(No Key)'}
+                </span>
+                <div className={`w-2 h-2 rounded-full shrink-0 ${deepgramActive ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-zinc-700'}`} />
+              </div>
+              <div className="flex items-center justify-between group">
+                <span className="text-xs font-bold text-zinc-500">Gemini {deepgramActive ? '(Fallback)' : '(Active)'}</span>
+                <div className={`w-2 h-2 rounded-full shrink-0 ${googleUser || settings.googleApiKey ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500 animate-pulse'}`} />
               </div>
               <div className="flex items-center justify-between group">
                 <span className="text-xs font-bold text-zinc-500">FFmpeg Scraper</span>
-                <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]" />
+                <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)] shrink-0" />
               </div>
            </div>
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col bg-black relative">
-        <header className="h-20 border-b border-zinc-900 flex items-center justify-between px-10 bg-black/50 backdrop-blur-xl sticky top-0 z-40">
-           <h2 className="text-xl font-black text-white tracking-tight italic underline">
-             {activeTab === 'TRANSCRIPTION' ? 'Advanced Workbench' : activeTab === 'SETTINGS' ? 'Engine Parameters' : 'Batch Processor'}
-           </h2>
+      <main className="flex-1 flex flex-col bg-black relative min-w-0">
+        <header className="h-16 sm:h-20 border-b border-zinc-900 flex items-center justify-between gap-3 px-4 sm:px-6 lg:px-10 bg-black/50 backdrop-blur-xl sticky top-0 z-30">
+           <div className="flex items-center gap-2 min-w-0">
+              <button onClick={() => setIsSidebarOpen(true)} className="md:hidden p-2 -ml-2 text-zinc-400 hover:text-white shrink-0">
+                <Menu size={22} />
+              </button>
+              <h2 className="text-base sm:text-xl font-black text-white tracking-tight italic underline truncate">
+                {activeTab === 'TRANSCRIPTION' ? 'Advanced Workbench' : activeTab === 'SETTINGS' ? 'Engine Parameters' : 'Batch Processor'}
+              </h2>
+           </div>
            
-           <div className="flex items-center gap-4">
+           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
               {activeTab === 'TRANSCRIPTION' && !viewingItemId && (
-                <div className="flex bg-zinc-900 rounded-xl p-1 border border-zinc-800">
-                  <button onClick={() => setMode(AppMode.UPLOAD)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.UPLOAD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Local File</button>
-                  <button onClick={() => setMode(AppMode.URL)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.URL ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Remote Link</button>
-                  <button onClick={() => setMode(AppMode.RECORD)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === AppMode.RECORD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Live Record</button>
+                <div className="flex bg-zinc-900 rounded-xl p-1 border border-zinc-800 overflow-x-auto max-w-[180px] sm:max-w-none">
+                  <button onClick={() => setMode(AppMode.UPLOAD)} className={`px-2.5 sm:px-4 py-1.5 rounded-lg text-[11px] sm:text-xs font-bold transition-all whitespace-nowrap ${mode === AppMode.UPLOAD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>File</button>
+                  <button onClick={() => setMode(AppMode.URL)} className={`px-2.5 sm:px-4 py-1.5 rounded-lg text-[11px] sm:text-xs font-bold transition-all whitespace-nowrap ${mode === AppMode.URL ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Link</button>
+                  <button onClick={() => setMode(AppMode.RECORD)} className={`px-2.5 sm:px-4 py-1.5 rounded-lg text-[11px] sm:text-xs font-bold transition-all whitespace-nowrap ${mode === AppMode.RECORD ? 'bg-zinc-800 text-white shadow-lg' : 'text-zinc-500 hover:text-zinc-300'}`}>Record</button>
                 </div>
               )}
-              {viewingItemId && <button onClick={() => setViewingItemId(null)} className="px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-all text-xs font-bold flex items-center gap-2 uppercase"><ArrowLeft size={14} /> Back</button>}
+              {viewingItemId && <button onClick={() => setViewingItemId(null)} className="px-3 sm:px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-all text-xs font-bold flex items-center gap-2 uppercase"><ArrowLeft size={14} /> <span className="hidden sm:inline">Back</span></button>}
            </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-10 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-10 custom-scrollbar">
           {activeTab === 'TRANSCRIPTION' && (
             <div className="max-w-4xl mx-auto w-full">
               {viewingItem && viewingItem.result ? (
@@ -252,7 +291,7 @@ const App: React.FC = () => {
               ) : (
                   <div className="flex flex-col items-center justify-center min-h-[50vh] text-center">
                     <div className="w-16 h-16 rounded-3xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center text-indigo-500 mb-8"><Cpu size={32} /></div>
-                    <h2 className="text-3xl font-black text-white mb-4 tracking-tighter">Ready for Analysis.</h2>
+                    <h2 className="text-2xl sm:text-3xl font-black text-white mb-4 tracking-tighter">Ready for Analysis.</h2>
                     
                     <div className="w-full max-w-xl">
                        {mode === AppMode.URL ? (
@@ -289,15 +328,34 @@ const App: React.FC = () => {
           )}
 
           {activeTab === 'SETTINGS' && (
-            <div className="max-w-2xl mx-auto w-full space-y-12 animate-in fade-in duration-500">
+            <div className="max-w-2xl mx-auto w-full space-y-10 sm:space-y-12 animate-in fade-in duration-500">
                <section className="space-y-6">
-                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Cpu size={14} className="text-indigo-500" /> Engine Selection</h3>
+                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Zap size={14} className="text-indigo-500" /> Deepgram (Primary Engine)</h3>
+                  <div className="space-y-4 p-5 sm:p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
+                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Deepgram API Key</label>
+                    <input
+                      type="password"
+                      value={settings.deepgramKey}
+                      onChange={(e) => handleSaveSettings({ ...settings, deepgramKey: e.target.value })}
+                      placeholder="Paste your Deepgram API key..."
+                      className="w-full bg-black border border-zinc-800 rounded-2xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all"
+                    />
+                    <p className="text-[11px] text-zinc-500 leading-relaxed px-1">
+                      When set, every file is compressed/chunked with FFmpeg first, then transcribed with Deepgram
+                      (Nova-3, with speaker diarization). If this is empty, or a Deepgram request fails, it automatically
+                      falls back to Gemini.
+                    </p>
+                  </div>
+               </section>
+
+               <section className="space-y-6">
+                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Cpu size={14} className="text-indigo-500" /> Fallback Engine (Gemini)</h3>
                   <div className="grid grid-cols-2 gap-3">
                      {[
                        { id: 'gemini-1.5-pro', label: '1.5 Pro', desc: 'Maximum Intelligence' },
                        { id: 'gemini-2.5-flash', label: '2.5 Flash', desc: 'Highest Speed' },
                      ].map(m => (
-                       <button key={m.id} onClick={() => handleSaveSettings({ ...settings, geminiModel: m.id as any })} className={`p-5 rounded-3xl border transition-all text-left relative overflow-hidden ${settings.geminiModel === m.id ? 'bg-white border-white' : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'}`}>
+                       <button key={m.id} onClick={() => handleSaveSettings({ ...settings, geminiModel: m.id as any })} className={`p-4 sm:p-5 rounded-3xl border transition-all text-left relative overflow-hidden ${settings.geminiModel === m.id ? 'bg-white border-white' : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'}`}>
                           <p className={`text-sm font-black ${settings.geminiModel === m.id ? 'text-black' : 'text-white'}`}>{m.label}</p>
                           <p className={`text-[10px] font-bold mt-1 ${settings.geminiModel === m.id ? 'text-zinc-600' : 'text-zinc-500'}`}>{m.desc}</p>
                        </button>
@@ -307,7 +365,7 @@ const App: React.FC = () => {
 
                <section className="space-y-6">
                   <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2"><Book size={14} className="text-indigo-500" /> Intelligence Context</h3>
-                  <div className="space-y-4 p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
+                  <div className="space-y-4 p-5 sm:p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
                     <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Case Brief / Transcription Context</label>
                     <textarea value={settings.caseContext} onChange={(e) => handleSaveSettings({ ...settings, caseContext: e.target.value })} className="w-full h-32 bg-black border border-zinc-800 rounded-2xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all" placeholder="Provide background info to help the AI identify jargon and speaker intent..." />
                   </div>

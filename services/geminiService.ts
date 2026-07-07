@@ -1,17 +1,11 @@
 import { GoogleGenAI } from "@google/genai";
 
 const getAiClient = () => {
-<<<<<<< Updated upstream
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey) throw new Error("Gemini API key not configured");
-  return new GoogleGenAI({ apiKey });
-=======
-  const apiKey = process.env.API_KEY;
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.API_KEY;
   if (!apiKey || apiKey.trim() === '') {
-    throw new Error("Gemini API key is not configured. Please set API_KEY environment variable.");
+    throw new Error("Gemini API key is not configured. Please set VITE_GEMINI_API_KEY (or API_KEY) environment variable.");
   }
-  return new GoogleGenAI({ apiKey: apiKey });
->>>>>>> Stashed changes
+  return new GoogleGenAI({ apiKey });
 };
 
 export const summarizeText = async (text: string): Promise<string> => {
@@ -43,7 +37,5 @@ export const translateText = async (text: string, targetLanguage: string): Promi
   } catch (error) {
     console.error("Translation error:", error);
     throw error;
-  }
-};    throw error;
   }
 };

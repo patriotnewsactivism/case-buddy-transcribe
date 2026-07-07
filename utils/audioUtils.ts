@@ -98,15 +98,25 @@ export const extractAudio = async (
 
 /**
  * General-purpose media processing entry point.
- * Always runs through FFmpeg — no size-based bypasses.
- * For Gemini, the transcription service calls prepareAudioChunks() directly,
- * so this is mainly used for recording blobs and other providers.
+ *
+ * When skipConversion is true, the original file is passed straight through —
+ * used when the downstream transcription engine (Gemini's file API, or
+ * Deepgram via transcribeWithDeepgram's own compress+chunk pipeline) already
+ * does its own preparation and a redundant WAV extraction here would just
+ * waste time and battery (important for mobile).
+ *
+ * Otherwise it runs the file through FFmpeg to normalize it to 16 kHz mono WAV.
  */
 export const processMediaFile = async (
     file: File | Blob,
-    _skipConversion: boolean = false,   // kept for API compat, ignored
+    skipConversion: boolean = false,
     onProgress?: (pct: number) => void
 ): Promise<Blob> => {
+    if (skipConversion) {
+        onProgress?.(100);
+        return file;
+    }
+
     try {
         onProgress?.(0);
         const result = await extractAudio(file, onProgress);

@@ -12,6 +12,7 @@ export enum TranscriptionStatus {
 }
 
 export enum TranscriptionProvider {
+  DEEPGRAM = 'DEEPGRAM',
   GEMINI = 'GEMINI',
   OPENAI = 'OPENAI',
   ASSEMBLYAI = 'ASSEMBLYAI',
@@ -19,6 +20,7 @@ export enum TranscriptionProvider {
 
 export interface TranscriptionSettings {
   provider: TranscriptionProvider;
+  deepgramKey: string;
   openaiKey: string;
   assemblyAiKey: string;
   googleClientId: string;
@@ -104,4 +106,3 @@ export interface VoiceProfile {
   usageCount: number;
   aliases?: string[];
 }
-
