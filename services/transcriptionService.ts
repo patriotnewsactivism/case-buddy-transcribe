@@ -41,7 +41,7 @@ const transcribeWithGemini = async (file: Blob | File, settings: TranscriptionSe
   }
   
   const ai = new GoogleGenAI({ apiKey: API_KEY });
-  const model = ai.getGenerativeModel({ model: settings.geminiModel || 'gemini-2.5-flash' }); // Changed to cheaper model
+  const modelName = settings.geminiModel || 'gemini-2.5-flash';
 
   const context = settings.caseContext ? `CONTEXT: ${settings.caseContext}` : '';
   const vocab = settings.customVocabulary.length > 0 ? `VOCAB: ${settings.customVocabulary.join(', ')}` : '';
@@ -76,12 +76,13 @@ RULES:
     const fileUri = await uploadFileToGemini(file, onProgress);
     await waitForFileActive(fileUri);
     
-    const res = await model.generateContent({
+    const res = await ai.models.generateContent({
+        model: modelName,
         contents: [{ parts: [{ fileData: { fileUri, mimeType: file.type || 'audio/wav' } }, { text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
+        config: { responseMimeType: "application/json" }
     });
 
-    const parsed: any = JSON.parse(res.response.text());
+    const parsed: any = JSON.parse(res.text || '{}');
     return {
         text: parsed.segments.map((s: any) => `[${s.speaker}] ${s.text}`).join('\n'),
         segments: parsed.segments,
@@ -96,12 +97,13 @@ RULES:
       console.log("File upload failed, trying fallback with base64 encoding...");
       try {
           const base64Audio = await fileToBase64(file);
-          const fallbackRes = await model.generateContent({
+          const fallbackRes = await ai.models.generateContent({
+              model: modelName,
               contents: [{ parts: [{ inlineData: { mimeType: file.type || 'audio/wav', data: base64Audio } }, { text: prompt }] }],
-              generationConfig: { responseMimeType: "application/json" }
+              config: { responseMimeType: "application/json" }
           });
           
-          const fallbackParsed: any = JSON.parse(fallbackRes.response.text());
+          const fallbackParsed: any = JSON.parse(fallbackRes.text || '{}');
           return {
               text: fallbackParsed.segments.map((s: any) => `[${s.speaker}] ${s.text}`).join('\n'),
               segments: fallbackParsed.segments,

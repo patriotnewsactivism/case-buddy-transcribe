@@ -18,17 +18,43 @@ const getInstance = (): FFmpeg => {
 export const loadFFmpeg = async (): Promise<FFmpeg> => {
     const ff = getInstance();
     if (ff.loaded) return ff;
-    if (loadPromise) { await loadPromise; return ff; }
+
+    // If a load is already in flight, piggyback on it — but if it fails,
+    // clear it so the NEXT call gets a fresh attempt instead of replaying
+    // the same dead rejection forever (this previously caused every file
+    // after the first failure in a batch to fail instantly for the rest
+    // of the session).
+    if (loadPromise) {
+        try {
+            await loadPromise;
+            return ff;
+        } catch (err) {
+            loadPromise = null;
+            throw err;
+        }
+    }
 
     loadPromise = (async () => {
         const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
-        await ff.load({
-            coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-            wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-        });
+        await Promise.race([
+            (async () => {
+                await ff.load({
+                    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+                    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+                });
+            })(),
+            new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error("FFmpeg failed to load within 45s — check your network connection.")), 45000)
+            ),
+        ]);
     })();
 
-    await loadPromise;
+    try {
+        await loadPromise;
+    } catch (err) {
+        loadPromise = null; // allow a retry on the next call instead of staying permanently broken
+        throw err;
+    }
     return ff;
 };
 

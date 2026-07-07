@@ -19,11 +19,31 @@ interface DeepgramChunkResult {
   detectedLanguage?: string;
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Sends a single (already ffmpeg-compressed) audio blob to Deepgram's
- * prerecorded /listen endpoint and normalizes the response.
+ * prerecorded /listen endpoint and normalizes the response. Retries a
+ * couple of times on network hiccups / 5xx — this frequently runs over
+ * flaky mobile connections.
  */
-const callDeepgram = async (blob: Blob, apiKey: string): Promise<DeepgramChunkResult> => {
+const callDeepgram = async (blob: Blob, apiKey: string, retries = 2): Promise<DeepgramChunkResult> => {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await callDeepgramOnce(blob, apiKey);
+    } catch (err) {
+      const isLastAttempt = attempt === retries;
+      const message = err instanceof Error ? err.message : String(err);
+      // Don't retry on clear client errors (bad key, bad request) — only network/5xx issues.
+      const isRetryable = !/Deepgram error 4\d\d/.test(message);
+      if (isLastAttempt || !isRetryable) throw err;
+      await sleep(1000 * (attempt + 1));
+    }
+  }
+  throw new Error("Deepgram request failed after retries.");
+};
+
+const callDeepgramOnce = async (blob: Blob, apiKey: string): Promise<DeepgramChunkResult> => {
   const params = new URLSearchParams({
     model: DEEPGRAM_MODEL,
     smart_format: "true",
