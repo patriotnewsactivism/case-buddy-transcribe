@@ -101,7 +101,7 @@ const callDeepgramOnce = async (blob: Blob, apiKey: string): Promise<DeepgramChu
 export const transcribeWithDeepgram = async (
   file: File | Blob,
   settings: TranscriptionSettings,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number, stage?: string) => void
 ): Promise<TranscriptionResult> => {
   const apiKey = settings.deepgramKey?.trim();
   if (!apiKey) {
@@ -109,8 +109,8 @@ export const transcribeWithDeepgram = async (
   }
 
   // Step 1 — FFmpeg preprocessing (compress + chunk if needed). 0-40% of overall progress.
-  const chunks = await prepareAudioChunks(file, (pct) => {
-    onProgress?.(Math.round(pct * 0.4));
+  const chunks = await prepareAudioChunks(file, (pct, stage) => {
+    onProgress?.(Math.round(pct * 0.4), stage);
   });
 
   const allSegments: TranscriptSegment[] = [];
@@ -120,7 +120,7 @@ export const transcribeWithDeepgram = async (
   // Step 2 — send each chunk to Deepgram sequentially. 40-95% of overall progress.
   for (let i = 0; i < chunks.length; i++) {
     const { blob, startSec } = chunks[i];
-    onProgress?.(40 + Math.round((i / chunks.length) * 55));
+    onProgress?.(40 + Math.round((i / chunks.length) * 55), `Transcribing chunk ${i + 1}/${chunks.length} (Deepgram)...`);
 
     const chunkResult = await callDeepgram(blob, apiKey);
     if (chunkResult.detectedLanguage) detectedLanguage = chunkResult.detectedLanguage;

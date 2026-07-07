@@ -76,7 +76,7 @@ export const fetchRemoteMedia = async (url: string): Promise<Blob> => {
  * used as an automatic fallback. If both configured engines fail (or neither
  * is configured), this throws rather than silently handing the file to Gemini.
  */
-export const transcribeAudio = async (file: File | Blob, _base64: string, settings: TranscriptionSettings, onProgress?: (pct: number) => void): Promise<TranscriptionResult> => {
+export const transcribeAudio = async (file: File | Blob, _base64: string, settings: TranscriptionSettings, onProgress?: (pct: number, stage?: string) => void): Promise<TranscriptionResult> => {
     const deepgramKey = settings.deepgramKey?.trim();
     const groqKey = settings.groqKey?.trim();
 
